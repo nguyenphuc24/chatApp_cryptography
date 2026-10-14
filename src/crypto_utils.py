@@ -1,9 +1,13 @@
+import os
+import hashlib
 from typing import Tuple
 
 from cryptography.hazmat.primitives.asymmetric import rsa, padding as asym_padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
 
 def gen_rsa_keypair(key_size: int = 2048) -> Tuple [object, object]:
     private_key = rsa.generate_private_key(
@@ -48,3 +52,34 @@ def rsa_decrypt(cypertext: bytes, private_key : object) -> bytes:
             label=None
         )
     )
+
+
+#aes
+
+def aes_encrypt(data: bytes, key: bytes, iv: bytes) -> Tuple[bytes, bytes]:
+    if len(key) != 32:
+        raise ValueError(f"AES key invalid")
+    if iv is None:
+        iv = os.urandom(16)
+    elif len(iv) != 16:
+        raise ValueError(f"IV phải có 16 bytes")
+
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    padded = pad(data, AES.block_size, style='pkcs7')
+    return cipher.encrypt(padded), iv
+
+def aes_decrypt(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
+    if len(key) != 32:
+        raise ValueError(f"AES-256 cần key đúng 32 bytes, nhận được {len(key)} bytes")
+    if len(iv) != 16:
+        raise ValueError("IV phải đúng 16 bytes")
+
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    padded  = cipher.decrypt(ciphertext)
+    return unpad(padded, AES.block_size, style='pkcs7')
+
+
+#KDF
+def derive_session_key(mssv_list: list) -> bytes:
+    mssv = "".join(str(m).strip() for m in mssv_list)
+    return hashlib.sha256(mssv.encode()).digest()
