@@ -1,5 +1,6 @@
 import os
 import hashlib
+import hmac
 from typing import Tuple
 
 from cryptography.hazmat.primitives.asymmetric import rsa, padding as asym_padding
@@ -56,7 +57,7 @@ def rsa_decrypt(cypertext: bytes, private_key : object) -> bytes:
 
 #aes
 
-def aes_encrypt(data: bytes, key: bytes, iv: bytes) -> Tuple[bytes, bytes]:
+def aes_encrypt(data: bytes, key: bytes, iv: bytes = None) -> Tuple[bytes, bytes]:
     if len(key) != 32:
         raise ValueError(f"AES key invalid")
     if iv is None:
@@ -83,3 +84,83 @@ def aes_decrypt(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
 def derive_session_key(mssv_list: list) -> bytes:
     mssv = "".join(str(m).strip() for m in mssv_list)
     return hashlib.sha256(mssv.encode()).digest()
+
+
+def hmac_sign(data: bytes, key: bytes) -> bytes:
+    return hmac.new(key, data, hashlib.sha256).digest()
+
+def hmac_verify(data: bytes, signature: bytes, key: bytes) -> bool:
+    expected = hmac_sign(data, key)
+    return hmac.compare_digest(signature, expected)
+
+
+
+# SHA-256  –  Băm dữ liệu / kiểm tra toàn vẹn file
+
+
+def sha256_hash(data: bytes) -> bytes:
+    """Băm data trả về 32 bytes nhị phân."""
+    return hashlib.sha256(data).digest()
+
+
+def sha256_hex(data: bytes) -> str:
+    """Băm data trả về 64 ký tự hex (dùng làm checksum file)."""
+    return hashlib.sha256(data).hexdigest()
+
+
+
+#  Utility
+
+
+def bytes_to_hex(data: bytes) -> str:
+    return data.hex()
+
+def hex_to_bytes(hex_str: str) -> bytes:
+    return bytes.fromhex(hex_str)
+
+
+
+# Self_test
+if __name__ == "__main__":
+    print("=" * 60)
+    print("  CRYPTO UTILS – BÀI TỰ KIỂM TRA")
+    print("=" * 60)
+
+    # --- Test 1: RSA ---
+    print("\n[1] RSA-2048 + OAEP")
+    priv, pub = gen_rsa_keypair(2048)
+    pem = serialize_public_key(pub)
+    pub2 = deserialize_public_key(pem)
+    secret = b"MySessionKey!1234567890123456789"   # 32 bytes
+    enc = rsa_encrypt(secret, pub2)
+    dec = rsa_decrypt(enc, priv)
+    assert dec == secret, "RSA THẤT BẠI"
+    print("  ✓ RSA sinh khoá, serialize PEM, mã hoá và giải mã – OK")
+
+    # --- Test 2: AES ---
+    print("\n[2] AES-256-CBC + PKCS#7")
+    key = os.urandom(32)
+    msg = b"Tin nhan bao mat dai hon 16 bytes de kiem tra padding."
+    ct, iv = aes_encrypt(msg, key)
+    pt = aes_decrypt(ct, key, iv)
+    assert pt == msg, "AES THẤT BẠI"
+    print("  ✓ AES mã hoá và giải mã – OK")
+
+    # --- Test 3: KDF ---
+    print("\n[3] KDF từ MSSV")
+    mssv = ["2312345", "2312346"]
+    k1 = derive_session_key(mssv)
+    k2 = derive_session_key(mssv)
+    assert k1 == k2 and len(k1) == 32, "KDF THẤT BẠI"
+    print(f"  ✓ Session Key (hex): {k1.hex()}")
+
+    # --- Test 4: HMAC ---
+    print("\n[4] HMAC-SHA256")
+    sig = hmac_sign(msg, key)
+    assert hmac_verify(msg, sig, key) == True,  "HMAC hợp lệ thất bại"
+    assert hmac_verify(msg + b"x", sig, key) == False, "Phát hiện giả mạo thất bại"
+    print("  ✓ HMAC ký và xác thực (kể cả phát hiện giả mạo) – OK")
+
+    print("\n" + "=" * 60)
+    print("  TẤT CẢ BÀI TEST ĐỀU ĐẠT – SẴN SÀNG TÍCH HỢP!")
+    print("=" * 60)
