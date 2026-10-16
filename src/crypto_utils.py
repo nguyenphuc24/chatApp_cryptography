@@ -81,9 +81,14 @@ def aes_decrypt(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
 
 
 #KDF
-def derive_session_key(mssv_list: list) -> bytes:
-    mssv = "".join(str(m).strip() for m in mssv_list)
+def derive_session_key(mssv_list: list, client_none: str, server_nonce: str) -> bytes:
+    mssv = "".join(str(m).strip() for m in mssv_list) + str(client_none) + str(server_nonce)
     return hashlib.sha256(mssv.encode()).digest()
+
+def derive_keys(master_key: bytes) -> tuple[bytes, bytes]:
+    key_aes = hashlib.sha256(master_key + b":encryption").digest()
+    key_hmac = hashlib.sha256(master_key + b":authentication").digest()
+    return key_aes, key_hmac
 
 
 def hmac_sign(data: bytes, key: bytes) -> bytes:
@@ -93,6 +98,30 @@ def hmac_verify(data: bytes, signature: bytes, key: bytes) -> bool:
     expected = hmac_sign(data, key)
     return hmac.compare_digest(signature, expected)
 
+#         Wire format: [ IV (16B) ] [ Ciphertext (NB) ] [ HMAC Tag (32B) ]
+def encrypt_then_MAC(plaintext: bytes, key_aes: bytes, key_hmac: bytes) -> bytes:
+
+    ciphertext, iv = aes_encrypt(plaintext, key_aes)
+    payload_body = iv +  ciphertext
+    sig = hmac_sign(payload_body, key_hmac)
+    return payload_body + sig
+
+
+def MAC_then_decrypt(payload: bytes, key_aes: bytes, key_hmac: bytes) -> bytes | None:
+    if len(payload) < 64 : return None
+
+    payload_body = payload[:-32]
+    sig = payload[-32:]
+
+    if not hmac_verify(payload_body, sig, key_hmac) : 
+        return None
+
+    iv = payload_body[:16]
+    ciphertext = payload_body[16:]
+    try:
+        return aes_decrypt(ciphertext, key_aes, iv)
+    except Exception:
+        return None 
 
 
 # SHA-256  –  Băm dữ liệu / kiểm tra toàn vẹn file

@@ -2,8 +2,7 @@
 #   "type"      : "MESSAGE",
 #   "sender"    : "client",
 #   "payload"   : { "content": "Hello!" },
-#   "timestamp" : 1715000000.123,
-#   "signature" : "a3f9c1d2..."
+#   "timestamp" : 1715000000.123
 # }
 
 
@@ -12,7 +11,6 @@ import json
 import time
 import struct
 import socket
-import secrets
 from enum import Enum
 
 class MessageType(Enum):
@@ -40,7 +38,6 @@ class Packet:
         self.sender = sender
         self.payload = payload
         self.timestamp =  time.time()
-        self.signature = None
 
     def to_json(self) -> str:
         return json.dumps({
@@ -48,7 +45,6 @@ class Packet:
             "sender"    : self.sender,
             "payload"   : self.payload,
             "timestamp" : self.timestamp,
-            "signature" : self.signature,
         })
     
     def to_bytes(self) -> bytes:
@@ -59,7 +55,6 @@ class Packet:
         data = json.loads(json_data)
         pkt  = Packet(data["type"], data["sender"], data["payload"])
         pkt.timestamp = data.get("timestamp", time.time())
-        pkt.signature = data.get("signature")
         return pkt
 
     @staticmethod
@@ -96,20 +91,21 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes | None :
 
 
 
-def make_handshake_init(client_pub_pem: str, mssv_list: list,
+def make_handshake_init(client_pub_pem: str, mssv_list: list, client_nonce: str,
                         encrypted_session_key_hex: str) -> Packet:
     msg = "Hello, We are" + ", ".join(str(m) for m in mssv_list)
     return Packet(MessageType.HANDSHAKE_INIT.value, "client", {
         "message"               : msg,
         "mssv_list"             : [str(m) for m in mssv_list],
         "public_key"            : client_pub_pem,
+        "client_nonce"
         "session_key_encrypted" : encrypted_session_key_hex
     })
 
-def make_handshake_response(server_pub_pem: str) -> Packet:
+def make_handshake_response(server_pub_pem: str, server_nonce: str = "") -> Packet:
     return Packet(MessageType.HANDSHAKE_RESPONSE.value, "server", {
         "public_key"    : server_pub_pem,
-        "server_nonce"  : secrets.token_hex(16) 
+        "server_nonce"  : server_nonce
     })
 
 def make_handshake_ok() -> Packet:
