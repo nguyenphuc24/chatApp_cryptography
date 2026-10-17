@@ -23,7 +23,10 @@ class MessageType(Enum):
 
     FILE_TRANSFER_START = "FILE_TRANSFER_START" 
     FILE_TRANSFER_DATA  = "FILE_TRANSFER_DATA"   
-    FILE_TRANSFER_END   = "FILE_TRANSFER_END"    
+    FILE_TRANSFER_END   = "FILE_TRANSFER_END"
+    FILE_LIST_REQ       = "FILE_LIST_REQ"
+    FILE_LIST_RESP      = "FILE_LIST_RESP"
+    FILE_DOWNLOAD_REQ   = "FILE_DOWNLOAD_REQ"  
 
     # Điều khiển
     PING       = "PING"
@@ -91,15 +94,13 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes | None :
 
 
 
-def make_handshake_init(client_pub_pem: str, mssv_list: list, client_nonce: str,
-                        encrypted_session_key_hex: str) -> Packet:
+def make_handshake_init( mssv_list: list,
+                        encrypted_ms_hex: str) -> Packet:
     msg = "Hello, We are" + ", ".join(str(m) for m in mssv_list)
     return Packet(MessageType.HANDSHAKE_INIT.value, "client", {
         "message"               : msg,
         "mssv_list"             : [str(m) for m in mssv_list],
-        "public_key"            : client_pub_pem,
-        "client_nonce"
-        "session_key_encrypted" : encrypted_session_key_hex
+        "encrypted_ms"          : encrypted_ms_hex
     })
 
 def make_handshake_response(server_pub_pem: str, server_nonce: str = "") -> Packet:
@@ -141,6 +142,15 @@ def make_file_data(chunk_number: int, chunk_bytes: bytes) -> Packet:
 
 def make_file_end() -> Packet:
     return Packet(MessageType.FILE_TRANSFER_END.value, "client", {"status": "EOF"})
+
+def make_file_list_req() -> Packet:
+    return Packet(MessageType.FILE_LIST_REQ.value, "client", {})
+def make_file_list_resp(files: list) -> Packet:
+    return Packet(MessageType.FILE_LIST_RESP.value, "server", {
+        "files_list" : files
+    })
+def make_file_download_req(filename: str) -> Packet:
+    return Packet(MessageType.FILE_DOWNLOAD_REQ.value, "client", { "file_name" : filename})
 
 
 def make_disconnect(reason: str = "Normal closure") -> Packet:

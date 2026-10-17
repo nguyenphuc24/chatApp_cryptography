@@ -81,9 +81,10 @@ def aes_decrypt(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
 
 
 #KDF
-def derive_session_key(mssv_list: list, client_none: str, server_nonce: str) -> bytes:
-    mssv = "".join(str(m).strip() for m in mssv_list) + str(client_none) + str(server_nonce)
-    return hashlib.sha256(mssv.encode()).digest()
+def derive_session_key(master_secret: bytes, mssv_list: list, server_nonce: str) -> bytes:
+    mssv_part = "".join(str(m).strip() for m in mssv_list).encode()
+    nonce_part = str(server_nonce).encode()
+    return hashlib.sha256(master_secret + mssv_part + nonce_part).digest()
 
 def derive_keys(master_key: bytes) -> tuple[bytes, bytes]:
     key_aes = hashlib.sha256(master_key + b":encryption").digest()
