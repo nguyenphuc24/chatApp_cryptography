@@ -51,7 +51,7 @@ class SecureChatClient:
         self.server_nonce: str          = ""
 
 
-        self.download_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+        self.download_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../downloads")
         os.makedirs(self.download_dir, exist_ok=True)
 
         self._recv_file_name: str = ""
@@ -66,8 +66,8 @@ class SecureChatClient:
 
     def _send_packet(self, pkt: Packet) -> None:
         raw = pkt.to_bytes()
-        if self.key_enc is not None and self.key_mac is not None:
-            payload = encrypt_then_MAC(raw, self.key_enc, self.key_mac)
+        if self.key_aes is not None and self.key_hmac is not None:
+            payload = encrypt_then_MAC(raw, self.key_aes, self.key_hmac)
         else:
             payload = raw
         send_msg(self.sock, payload)
@@ -78,13 +78,13 @@ class SecureChatClient:
             self.connected = False
             return None
 
-        if self.key_enc is not None and self.key_mac is not None:
-            decrypted = MAC_then_decrypt(raw_payload, self.key_enc, self.key_mac)
+        if self.key_aes is not None and self.key_hmac is not None:
+            decrypted = MAC_then_decrypt(raw_payload, self.key_aes, self.key_hmac)
             if decrypted is None:
                 self.log("[CẢNH BÁO] Gói tin từ Server BỊ GIẢ MẠO hoặc lỗi HMAC! Drop.")
                 return None
 
-            pkt = Packet.from_bytes(decrypted)
+            pkt = Packet.from_byte(decrypted)
 
             if not is_timestamp_valid(pkt.timestamp):
                 self.log("[CẢNH BÁO] Gói tin từ Server bị REPLAY ATTACK - timestamp lỗi thời!")
@@ -92,7 +92,7 @@ class SecureChatClient:
 
             return pkt
         else:
-            return Packet.from_bytes(raw_payload)
+            return Packet.from_byte(raw_payload)
 
 
     def connect(self) -> bool:
@@ -118,8 +118,8 @@ class SecureChatClient:
             
             self.log(f"Đã nhận Server Public Key và Server Nonce: {self.server_nonce[:8]}…")
 
-            self.master_secret = secrets.token_hex(16)
-            self.log(f"Đã sinh Pre-Master Secret (hex đầu): {self.pre_master_secret.hex()[:16]}…")
+            self.master_secret = secrets.token_bytes(32)
+            self.log(f"Đã sinh Pre-Master Secret (hex đầu): {self.master_secret.hex()[:16]}…")
             encrypted_ms = rsa_encrypt(self.master_secret, self.server_pub_key)
 
 

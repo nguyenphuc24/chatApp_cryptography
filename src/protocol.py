@@ -51,7 +51,7 @@ class Packet:
         })
     
     def to_bytes(self) -> bytes:
-        self.to_json().encode()
+        return self.to_json().encode()
 
     @staticmethod
     def from_json(json_data: str) -> 'Packet':
@@ -94,9 +94,8 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes | None :
 
 
 
-def make_handshake_init( mssv_list: list,
-                        encrypted_ms_hex: str) -> Packet:
-    msg = "Hello, We are" + ", ".join(str(m) for m in mssv_list)
+def make_handshake_init(mssv_list: list, encrypted_ms_hex: str) -> Packet:
+    msg = "Hello, We are " + ", ".join(str(m) for m in mssv_list)
     return Packet(MessageType.HANDSHAKE_INIT.value, "client", {
         "message"               : msg,
         "mssv_list"             : [str(m) for m in mssv_list],
@@ -145,12 +144,14 @@ def make_file_end() -> Packet:
 
 def make_file_list_req() -> Packet:
     return Packet(MessageType.FILE_LIST_REQ.value, "client", {})
+
 def make_file_list_resp(files: list) -> Packet:
     return Packet(MessageType.FILE_LIST_RESP.value, "server", {
-        "files_list" : files
+        "files" : files
     })
+
 def make_file_download_req(filename: str) -> Packet:
-    return Packet(MessageType.FILE_DOWNLOAD_REQ.value, "client", { "file_name" : filename})
+    return Packet(MessageType.FILE_DOWNLOAD_REQ.value, "client", { "filename" : filename})
 
 
 def make_disconnect(reason: str = "Normal closure") -> Packet:

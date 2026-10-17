@@ -54,10 +54,9 @@ class ClientSession:
     def send_packet(self, pkt: Packet) -> None:
         raw = pkt.to_bytes()
 
-        if self.session_key is not None:
+        if self.key_aes is not None and self.key_hmac is not None:
             payload = encrypt_then_MAC(raw, self.key_aes, self.key_hmac)
-
-        else : 
+        else: 
             payload = raw
 
         send_msg(self.socket, payload)
@@ -214,7 +213,7 @@ class SecureChatServer:
             #KDF
             session.session_key = derive_session_key(master_secret, mssv_list, session.server_nonce)
             self.log(f"  ✓ Session Key dẫn xuất thành công (hex đầu): {session.session_key.hex()[:16]}…")
-            session.key_enc, session.key_mac = derive_keys(session.session_key)
+            session.key_aes, session.key_hmac = derive_keys(session.session_key)
             #Send response
             session.send_packet(make_handshake_ok())
             #Recv ACK
