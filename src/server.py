@@ -1,347 +1,454 @@
-import socket
+"""
+server.py – Server đa luồng: accept kết nối, handshake, relay E2E, lưu file.
+
+Chức năng:
+  - Xác thực từng client bằng PKI (handshake.server_handshake).
+  - Server gán sender = CN của cert (client không tự khai được).
+  - Relay E2E_MSG nguyên vẹn (không giải mã).
+  - Lưu file E2E vào server_storage/ (meta + chunks JSON).
+  - Xử lý ROSTER_REQ, FILE_LIST_REQ, FILE_GET_REQ.
+  - PING/PONG heartbeat; idle 60s → đóng kết nối.
+  - Ghi file an toàn: ghi tệp tạm, os.replace khi hoàn tất; xoá tạm nếu lỗi.
+  - Tên file hợp lệ: [A-Za-z0-9._-], ≤100 ký tự. Trùng tên → đổi tên.
+  - Giới hạn kích thước file: MAX_FILE = 10 MiB.
+
+Chạy:
+  python src/server.py
+  python src/server.py --ca pki/ca.crt --cert pki/server.crt --key pki/server.key
+"""
+
+import argparse
+import json
+import os
+import sys
 import threading
 import time
-import secrets
-import os
-import hashlib
+import uuid
 from datetime import datetime
 
-from crypto_utils import (
-    gen_rsa_keypair, serialize_public_key, deserialize_public_key,
-    rsa_decrypt, aes_encrypt, aes_decrypt,
-    hmac_sign, hmac_verify, derive_session_key,
-    derive_keys, encrypt_then_MAC, MAC_then_decrypt,
-    hex_to_bytes, sha256_hex, bytes_to_hex,
+# Thêm src/ vào path để import các module cùng thư mục
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import framing
+import handshake as hs
+import pki as pki_module
+from e2e import validate_filename, MAX_FILE
+from session import (
+    Session, sanitize,
+    MT_PING, MT_PONG, MT_DISCONNECT, MT_ERROR,
+    MT_ROSTER_REQ, MT_ROSTER_RESP,
+    MT_E2E_MSG,
+    MT_SYS_MSG,
+    MT_FILE_E2E_START, MT_FILE_E2E_CHUNK, MT_FILE_E2E_END,
+    MT_FILE_LIST_REQ, MT_FILE_LIST_RESP, MT_FILE_GET_REQ,
 )
 
-from protocol import (
-    Packet, MessageType,
-    send_msg, recv_msg,
-    make_handshake_response, make_handshake_ok, make_message_ack,
-    make_message, make_error,
-    make_file_data, make_file_start, make_file_end, make_file_list_resp
-)
-
-# Bảo vệ Replay attack
-
-REPLAY_WINDOW_SECONDS = 30
-
-def is_timestamp_valid(ts: float) -> bool:
-    now = time.time()
-    return (now - REPLAY_WINDOW_SECONDS) <= ts <= (now + 10)
-
-# Quản lý phiên Client
-class ClientSession:
-
-    
-    def __init__(self, client_id: int, sock: socket.socket, addr: tuple):
-        self.client_id      = client_id
-        self.socket         = sock
-        self.addr           = addr
-        self.session_key: bytes | None = None
-        self.key_aes: bytes | None = None    # AES-256 key (Tách khoá)
-        self.key_hmac: bytes | None = None    # HMAC key (Tách khoá)
-        self.server_nonce: str       = ""       # Nonce ngẫu nhiên do Server sinh
-        self.mssv_list: list[str]    = []
-        self.username: str           = f"Client#{client_id}"
-        self.connected       = True
-        # Buffer nhận file
-        self._file_buf : bytearray = bytearray()
-        self._file_name: str       = ""
-        self._file_chk : str       = ""
-        
-
-    def send_packet(self, pkt: Packet) -> None:
-        raw = pkt.to_bytes()
-
-        if self.key_aes is not None and self.key_hmac is not None:
-            payload = encrypt_then_MAC(raw, self.key_aes, self.key_hmac)
-        else: 
-            payload = raw
-
-        send_msg(self.socket, payload)
-
-    def recv_packet(self) -> Packet | None:
-        raw_payload = recv_msg(self.socket)
-        if raw_payload is None:
-            self.connected = False
-            return None
-
-        if self.key_aes is not None and self.key_hmac is not None:
-            decrypted = MAC_then_decrypt(raw_payload, self.key_aes, self.key_hmac)
-            if decrypted is None:
-                print(f"[!] WARNING : Gói tin từ client #{self.client_id} bị giả mạo hoặc lỗi HMAC")
-                return None
-
-            pkt = Packet.from_byte(decrypted)
-
-            if not is_timestamp_valid(pkt.timestamp):
-                print(f"[!] WARNING : Gói tin từ client {self.client_id} quá hạn (Replay Attack)")
-                return None
-            return pkt
-
-        else: 
-            return Packet.from_byte(raw_payload)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_CA      = os.path.join(BASE_DIR, "pki", "ca.crt")
+DEFAULT_CERT    = os.path.join(BASE_DIR, "pki", "server.crt")
+DEFAULT_KEY     = os.path.join(BASE_DIR, "pki", "server.key")
+DEFAULT_STORAGE = os.path.join(BASE_DIR, "server_storage")
 
 
-    def close(self):
-        self.connected = False
-        try:
-            self.socket.close()
-        except Exception:
-            pass
+# ─── Đổi tên file không trùng ─────────────────────────────────────────────────
+
+def _unique_name(storage_dir: str, name: str) -> str:
+    """Nếu <name>.json đã tồn tại, thử <name> (1).json, (2)... cho đến khi tìm được."""
+    base, ext = os.path.splitext(name)
+    candidate  = name
+    i = 1
+    while os.path.exists(os.path.join(storage_dir, candidate + ".json")):
+        candidate = f"{base} ({i}){ext}"
+        i += 1
+    return candidate
 
 
+# ─── Server ────────────────────────────────────────────────────────────────────
 
 class SecureChatServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 5000):
-        self.host    = host
-        self.port    = port
-        self.running = True
-        self.clients: dict[int, ClientSession] = {}
-        self._lock   = threading.Lock()
-        self._next_id = 0
 
-        self.storage_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../server_storage")
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 5000,
+        ca_cert=None,
+        server_cert=None,
+        server_key=None,
+        storage_dir: str = DEFAULT_STORAGE,
+    ):
+        self.host        = host
+        self.port        = port
+        self.ca_cert     = ca_cert
+        self.server_cert = server_cert
+        self.server_key  = server_key
+        self.storage_dir = storage_dir
         os.makedirs(self.storage_dir, exist_ok=True)
 
-        # Sinh cặp khoá RSA-2048 cho Server
-        self.log("Đang sinh cặp khoá RSA-2048 cho Server…")
-        self._priv_key, self._pub_key = gen_rsa_keypair(2048)
-        self._pub_pem = serialize_public_key(self._pub_key).decode()
-        self.log("Sinh khoá RSA xong.")
+        self._lock   = threading.Lock()
+        # sessions: {cn: Session}  — chỉ client đã handshake thành công
+        self._sessions: dict[str, Session] = {}
+        # known_certs: {cn: x509.Certificate} — tất cả cert đã thấy
+        self._known_certs: dict[str, object] = {}
 
-    def log(self, msg: str):
+    def log(self, msg: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
-        print(f"[{ts}] [Server] {msg}")
+        safe_msg = sanitize(msg)
+        try:
+            print(f"[{ts}] [Server] {safe_msg}")
+        except UnicodeEncodeError:
+            print(f"[{ts}] [Server] {safe_msg.encode('ascii', errors='backslashreplace').decode('ascii')}")
 
-    def start(self):
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # ── Vòng lặp chính ────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        srv = __import__("socket").socket()
+        srv.setsockopt(__import__("socket").SOL_SOCKET, __import__("socket").SO_REUSEADDR, 1)
         srv.bind((self.host, self.port))
-        srv.listen(5)
-        self.log(f"Đang lắng nghe trên {self.host}:{self.port}")
+        srv.listen(10)
+        self._srv = srv
+        self.log(f"Lắng nghe tại {self.host}:{self.port}")
 
         try:
-            while self.running:
+            while True:
                 try:
                     conn, addr = srv.accept()
                 except OSError:
                     break
-
-                with self._lock:
-                    self._next_id += 1
-                    cid = self._next_id
-
-                self.log(f"Client #{cid} kết nối từ {addr[0]}:{addr[1]}")
+                conn.settimeout(60)
                 t = threading.Thread(
                     target=self._handle_client,
-                    args=(cid, conn, addr),
-                    daemon=True
+                    args=(conn, addr),
+                    daemon=True,
                 )
                 t.start()
         except KeyboardInterrupt:
-            print("Tắt server ...")
+            self.log("Tắt server.")
         finally:
-            self.running = False
-            for s in list(self.clients.values()):
-                s.close()
-            srv.close()
+            try:
+                srv.close()
+            except Exception:
+                pass
 
-    def _handle_client(self, cid: int, conn: socket.socket, addr: tuple):
-        conn.settimeout(60)
+    def stop(self) -> None:
+        """Đóng server socket để thoát vòng lặp accept."""
+        if hasattr(self, "_srv") and self._srv:
+            try:
+                self._srv.close()
+            except Exception:
+                pass
 
-        session = ClientSession(cid, conn, addr)
+    # ── Xử lý từng client ─────────────────────────────────────────────────────
+
+    def _handle_client(self, conn, addr) -> None:
+        peer = f"{addr[0]}:{addr[1]}"
+        session: Session | None = None
+        try:
+            session = hs.server_handshake(
+                conn, self.ca_cert, self.server_cert, self.server_key
+            )
+        except Exception as exc:
+            self.log(f"Handshake thất bại từ {peer}: {exc}")
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return
+
+        cn = session.peer_cn
+        self.log(f"Handshake OK: {cn} ({peer})")
 
         with self._lock:
-            self.clients[cid] = session
+            self._sessions[cn] = session
+            if session.peer_cert_pem:
+                self._known_certs[cn] = session.peer_cert_pem
+
+        self._broadcast_sys(f"{cn} đã tham gia.", exclude_cn=cn)
 
         try:
-            if not self._handshake(session):
-                self.log(f"Handshake thất bại với Client #{cid}. Đóng kết nối.")
-                return
-            
-            self.log(f"Handshake thành công với Client #{cid}. (MSSV: {', '.join(session.mssv_list)})")
-            #Thông báo broadcast
-            self._broadcast_system(f"[{session.username}] đã tham gia phòng chat.", exclude_id=cid)
-
-            while session.connected:
-                pkt = session.recv_packet()
-                if pkt is None:
-                    break
-                self._process(session, pkt) #logic xử lý gói tin
-
-        except Exception as e:
-            self.log(f"Lỗi Client #{cid}: {e}")
+            self._dispatch_loop(session)
+        except Exception as exc:
+            self.log(f"Lỗi client {cn}: {exc}")
         finally:
-            session.close()
             with self._lock:
-                self.clients.pop(cid, None)
-            self.log(f"Client #{cid} đã ngắt kết nối.")
-            self._broadcast_system(f"[{session.username}] đã rời phòng chat.", exclude_id=cid)
+                self._sessions.pop(cn, None)
+            try:
+                session.close()
+            except Exception:
+                pass
+            self.log(f"{cn} đã ngắt kết nối.")
+            self._broadcast_sys(f"{cn} đã rời.", exclude_cn=cn)
 
+    def _dispatch_loop(self, session: Session) -> None:
+        """Vòng lặp nhận và điều phối gói tin từ một client."""
+        upload: dict | None = None   # {'meta': ..., 'chunks': [...], 'tmp': str}
 
-    def _handshake(self, session: ClientSession) -> bool:
+        while not session.closed:
+            pkt = session.recv()
+            if pkt is None:
+                break
 
+            t       = pkt.get("type", "")
+            payload = pkt.get("payload", {})
+            cn      = session.peer_cn   # Đây là sender thực sự (từ cert)
+
+            if t == MT_PING:
+                session.send(MT_PONG, {}, sender="server")
+
+            elif t == MT_PONG:
+                pass   # heartbeat phản hồi, _last_recv đã cập nhật trong recv()
+
+            elif t == MT_DISCONNECT:
+                break
+
+            elif t == MT_ROSTER_REQ:
+                self._handle_roster_req(session)
+
+            elif t == MT_E2E_MSG:
+                self._relay_e2e_msg(session, payload, cn)
+
+            elif t == MT_FILE_E2E_START:
+                upload = self._handle_file_start(session, payload, cn)
+
+            elif t == MT_FILE_E2E_CHUNK:
+                if upload is not None:
+                    upload["chunks"].append({
+                        "idx":  payload.get("idx", -1),
+                        "data": payload.get("data", ""),
+                    })
+                    # Kiểm tra kích thước tích luỹ (mỗi chunk hex = ~2× bytes thực)
+                    total_bytes = sum(len(c["data"]) // 2 for c in upload["chunks"])
+                    if total_bytes > MAX_FILE:
+                        self.log(f"File từ {cn} vượt MAX_FILE — huỷ upload.")
+                        self._cancel_upload(upload)
+                        upload = None
+                        session.send(MT_ERROR, {"code": 413, "message": "File vượt giới hạn MAX_FILE"}, sender="server")
+
+            elif t == MT_FILE_E2E_END:
+                if upload is not None:
+                    self._handle_file_end(session, upload, cn)
+                    upload = None
+                else:
+                    session.send(MT_ERROR, {"code": 400, "message": "Không có upload đang thực hiện"}, sender="server")
+
+            elif t == MT_FILE_LIST_REQ:
+                self._handle_file_list(session)
+
+            elif t == MT_FILE_GET_REQ:
+                self._handle_file_get(session, payload, cn)
+
+            else:
+                self.log(f"Gói không xác định từ {cn}: {t}")
+
+    # ── Roster ─────────────────────────────────────────────────────────────────
+
+    def _handle_roster_req(self, session: Session) -> None:
+        """Gửi danh sách các cert đã biết (kể cả offline; cert_pem rỗng nếu chưa lưu)."""
+        with self._lock:
+            online_set = set(self._sessions.keys())
+            roster = []
+            for cn, cert_pem in self._known_certs.items():
+                roster.append({
+                    "cn":       cn,
+                    "cert_pem": cert_pem if isinstance(cert_pem, str) else "",
+                    "online":   cn in online_set,
+                })
+        session.send(MT_ROSTER_RESP, {"roster": roster}, sender="server")
+
+    # ── Relay E2E message ──────────────────────────────────────────────────────
+
+    def _relay_e2e_msg(self, session: Session, payload: dict, sender_cn: str) -> None:
+        """Chuyển tiếp E2E_MSG đến mọi client khác. Không giải mã."""
+        with self._lock:
+            targets = [s for cn, s in self._sessions.items() if cn != sender_cn]
+        for tgt in targets:
+            try:
+                tgt.send(MT_E2E_MSG, payload, sender=sender_cn)
+            except Exception as exc:
+                self.log(f"Lỗi relay E2E_MSG → {tgt.peer_cn}: {exc}")
+
+    # ── File E2E ──────────────────────────────────────────────────────────────
+
+    def _handle_file_start(self, session: Session, payload: dict, cn: str) -> dict | None:
+        """Bắt đầu nhận file E2E. Trả về upload-state dict hoặc None nếu lỗi."""
+        meta = payload.get("meta") if (isinstance(payload, dict) and "meta" in payload) else payload
+        try:
+            name = validate_filename(meta.get("name", ""))
+        except ValueError as exc:
+            session.send(MT_ERROR, {"code": 400, "message": str(exc)}, sender="server")
+            return None
+
+        declared_size = meta.get("size", 0)
+        if declared_size > MAX_FILE:
+            session.send(MT_ERROR, {"code": 413, "message": "Kích thước khai báo vượt MAX_FILE"}, sender="server")
+            return None
+
+        tmp_id   = uuid.uuid4().hex
+        tmp_path = os.path.join(self.storage_dir, f".tmp_{tmp_id}.json")
+        self.log(f"Bắt đầu nhận file '{name}' từ {cn} (tmp={tmp_id[:8]})")
+        return {"meta": meta, "chunks": [], "tmp": tmp_path, "name": name, "sender": cn}
+
+    def _handle_file_end(self, session: Session, upload: dict, cn: str) -> None:
+        """Hoàn tất upload: kiểm tra chunk count, ghi file tạm, đổi tên sang cuối."""
+        meta     = upload["meta"]
+        chunks   = upload["chunks"]
+        tmp_path = upload["tmp"]
+        name     = upload["name"]
+
+        expected_chunks = meta.get("chunks", 0)
+        if len(chunks) != expected_chunks:
+            self.log(f"File '{name}' từ {cn}: số chunk không khớp ({len(chunks)} ≠ {expected_chunks})")
+            self._cancel_upload(upload)
+            session.send(MT_ERROR, {
+                "code": 400,
+                "message": f"Số chunk không khớp: nhận {len(chunks)}, khai báo {expected_chunks}",
+            }, sender="server")
+            return
+
+        # Ghi tệp tạm trước
+        stored = {"meta": meta, "chunks": chunks, "sender": cn}
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(stored, f, ensure_ascii=False)
+        except Exception as exc:
+            self.log(f"Lỗi ghi tệp tạm: {exc}")
+            self._cancel_upload(upload)
+            session.send(MT_ERROR, {"code": 500, "message": "Lỗi ghi file tạm"}, sender="server")
+            return
+
+        # Đổi tên sang tên cuối (tránh ghi đè)
+        final_name = _unique_name(self.storage_dir, name)
+        final_path = os.path.join(self.storage_dir, final_name + ".json")
+        try:
+            os.replace(tmp_path, final_path)
+        except Exception as exc:
+            self.log(f"Lỗi os.replace: {exc}")
+            self._cancel_upload(upload)
+            session.send(MT_ERROR, {"code": 500, "message": "Lỗi lưu file"}, sender="server")
+            return
+
+        self.log(f"File '{final_name}' từ {cn} lưu xong.")
+        self._broadcast_sys(f"{cn} đã chia sẻ file '{final_name}'. Dùng !getfile để tải.")
+
+    def _cancel_upload(self, upload: dict) -> None:
+        """Xoá tệp tạm khi upload thất bại."""
+        tmp = upload.get("tmp", "")
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+    # ── File list ─────────────────────────────────────────────────────────────
+
+    def _handle_file_list(self, session: Session) -> None:
+        files = []
+        try:
+            for fname in os.listdir(self.storage_dir):
+                if fname.endswith(".json") and not fname.startswith(".tmp_"):
+                    fpath = os.path.join(self.storage_dir, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        meta   = data.get("meta", {})
+                        sender = data.get("sender", "?")
+                        files.append({
+                            "name":   meta.get("name", fname),
+                            "size":   meta.get("size", 0),
+                            "sender": sender,
+                        })
+                    except Exception:
+                        pass
+        except Exception as exc:
+            self.log(f"Lỗi đọc danh sách file: {exc}")
+        session.send(MT_FILE_LIST_RESP, {"files": files}, sender="server")
+
+    # ── File download ──────────────────────────────────────────────────────────
+
+    def _handle_file_get(self, session: Session, payload: dict, cn: str) -> None:
+        req_name = payload.get("name", "")
+        # Tìm file khớp tên gốc (meta.name)
+        found_path = None
+        try:
+            for fname in os.listdir(self.storage_dir):
+                if fname.endswith(".json") and not fname.startswith(".tmp_"):
+                    fpath = os.path.join(self.storage_dir, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        if data.get("meta", {}).get("name") == req_name:
+                            found_path = fpath
+                            break
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        if found_path is None:
+            session.send(MT_ERROR, {"code": 404, "message": f"File '{req_name}' không tồn tại"}, sender="server")
+            return
 
         try:
-            session.server_nonce = secrets.token_hex(16)
-            session.send_packet(make_handshake_response(self._pub_pem, session.server_nonce))
+            with open(found_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            session.send(MT_ERROR, {"code": 500, "message": f"Lỗi đọc file: {exc}"}, sender="server")
+            return
 
-            pkt = session.recv_packet()
-            if pkt is None or pkt.type != MessageType.HANDSHAKE_INIT.value : return False
+        meta   = data.get("meta", {})
+        chunks = data.get("chunks", [])
+        sender = data.get("sender", "")
 
-            msg = pkt.payload.get("message", "")
-            mssv_list = pkt.payload.get("mssv_list", [])
-            ms_hex = pkt.payload.get("encrypted_ms" ,"")
+        # Gửi START
+        session.send(MT_FILE_E2E_START, {"meta": meta}, sender=sender)
+        # Gửi từng chunk
+        for chunk in chunks:
+            session.send(MT_FILE_E2E_CHUNK, chunk, sender=sender)
+        # Gửi END
+        session.send(MT_FILE_E2E_END, {"chunks": len(chunks)}, sender=sender)
+        self.log(f"Đã gửi file '{req_name}' cho {cn}.")
 
-            session.mssv_list = mssv_list
-            session.username  = f"{'_'.join(str(m) for m in mssv_list)}" if mssv_list else session.username
+    # ── Broadcast hệ thống ─────────────────────────────────────────────────────
 
-            ms_bytes = hex_to_bytes(ms_hex)
-            try: 
-                master_secret = rsa_decrypt(ms_bytes, self._priv_key)
-            except Exception as e:
-                self.log(f"Lỗi giải mã master secret: {e}")
-                return False
-
-            self.log(f"  → Thông điệp MSSV: '{msg}'")
-            self.log(f"  → Server Nonce: {session.server_nonce[:8]}...")
-            self.log(f"  → Master Secret (hex đầu): {master_secret.hex()[:16]}…")
-
-
-            #KDF
-            session.session_key = derive_session_key(master_secret, mssv_list, session.server_nonce)
-            self.log(f"  ✓ Session Key dẫn xuất thành công (hex đầu): {session.session_key.hex()[:16]}…")
-            session.key_aes, session.key_hmac = derive_keys(session.session_key)
-            #Send response
-            session.send_packet(make_handshake_ok())
-            #Recv ACK
-            ack = session.recv_packet()
-            if ack is None or ack.type != MessageType.HANDSHAKE_ACK.value:
-                return False
-
-            return True
-        except Exception as e:
-            self.log(f"Handshake lỗi : {e}")
-            return False
-
-
-    def _broadcast(self, pkt: Packet, exclude_id: int = -1) -> None:
+    def _broadcast_sys(self, text: str, exclude_cn: str = "") -> None:
         with self._lock:
-            target = [s for cid, s in self.clients.items()
-                      if cid != exclude_id and s.connected and s.session_key is not None]
-
-
-        for s in target:
+            targets = [s for cn, s in self._sessions.items() if cn != exclude_cn]
+        for tgt in targets:
             try:
-                s.send_packet(pkt)
-            except Exception as e:
-                self.log(f"Lỗi Broadcast : {e}")
-
-    def _broadcast_system(self, text: str, exclude_id: int = -1) -> None:
-        """Gửi thông báo hệ thống broadcast"""
-        pkt = make_message(f"[Server]: {text}", "server")
-        self._broadcast(pkt, exclude_id=exclude_id)
+                tgt.send(MT_SYS_MSG, {"text": text}, sender="server")
+            except Exception:
+                pass
 
 
-    def _process(self,session: ClientSession, pkt: Packet ):
-        t = pkt.type
+# ─── Entry point ──────────────────────────────────────────────────────────────
 
-        if t == MessageType.MESSAGE.value:
-            content = pkt.payload.get("content", "")
-            self.log(f"[Chat {session.username}] {content}")
-            relay_pkt = make_message(f"[{session.username}] {content}", "server")
-            self._broadcast(relay_pkt, exclude_id=session.client_id)
-            #ACK cho client gửi
-            session.send_packet(make_message_ack())
-
-        elif t == MessageType.FILE_TRANSFER_START.value:
-            raw_filename = pkt.payload.get("filename", "file.bin")
-
-            session._file_name = os.path.basename(raw_filename)
-            session._file_chk  = pkt.payload.get("checksum", "")
-            session._file_buf  = bytearray()
-            self.log(f"Bắt đầu nhận file '{session._file_name}' từ {session.username}")
-        
-        elif t == MessageType.FILE_TRANSFER_DATA.value:
-            chunk_hex = pkt.payload.get("data", "")
-            session._file_buf.extend(hex_to_bytes(chunk_hex))
-        
-        elif t == MessageType.FILE_TRANSFER_END.value:
-            actual_chk = sha256_hex(bytes(session._file_buf))
-            
-            
-            save_path  = os.path.join(self.storage_dir, session._file_name)
-            
-            with open(save_path, "wb") as f:
-                f.write(session._file_buf)
-            
-            if actual_chk.lower() == session._file_chk.lower():
-                self.log(f"  File '{save_path}' nhận OK - SHA-256 khớp!")
-                self._broadcast_system(
-                    f"[{session.username}] đã chia sẻ file '{session._file_name}' ({len(session._file_buf)} bytes). Gõ '!download {session._file_name}' để tải về."
-                )
-            else:
-                self.log(f"  File '{save_path}' BỊ LỖI - SHA-256 KHÔNG KHỚP!")
-                self.log(f"  Nhận: {actual_chk[:16]}…  Kỳ vọng: {session._file_chk[:16]}…")
+def _parse_args():
+    p = argparse.ArgumentParser(description="Secure Chat Server")
+    p.add_argument("--host",    default="0.0.0.0")
+    p.add_argument("--port",    type=int, default=5000)
+    p.add_argument("--ca",      default=DEFAULT_CA)
+    p.add_argument("--cert",    default=DEFAULT_CERT)
+    p.add_argument("--key",     default=DEFAULT_KEY)
+    p.add_argument("--storage", default=DEFAULT_STORAGE)
+    return p.parse_args()
 
 
-        #List các file có trên server
-        elif t == MessageType.FILE_LIST_REQ.value:
-            file_list = []
-            try:
-                for fname in os.listdir(self.storage_dir):
-                    fpath = os.path.join(self.storage_dir, fname)
-                    if os.path.isfile(fpath):
-                        file_list.append({
-                            "filename": fname,
-                            "size": os.path.getsize(fpath),
-                        })
-            except Exception as e:
-                self.log(f"Lỗi đọc danh sách file: {e}")
-            session.send_packet(make_file_list_resp(file_list))
-
-        #Download 1 file với lệnh !download
-        elif t == MessageType.FILE_DOWNLOAD_REQ.value:
-            req_filename = os.path.basename(pkt.payload.get("filename", ""))
-            file_path    = os.path.join(self.storage_dir, req_filename)
-
-            if not os.path.exists(file_path) or not os.path.isfile(file_path):
-                self.log(f"Client #{session.client_id} yêu cầu tải file không tồn tại: '{req_filename}'")
-                session.send_packet(make_error(404, f"File '{req_filename}' không tồn tại trên Server!"))
-                return
-
-            try:
-                with open(file_path, "rb") as f:
-                    file_data = f.read()
-                filesize = len(file_data)
-                checksum = sha256_hex(file_data)
-
-                self.log(f"Đang gửi file '{req_filename}' ({filesize} bytes) cho {session.username}...")
-                session.send_packet(make_file_start(req_filename, filesize, checksum))
-
-                chunk_size = 4096
-                for i, offset in enumerate(range(0, filesize, chunk_size)):
-                    chunk = file_data[offset: offset + chunk_size]
-                    session.send_packet(make_file_data(i, chunk))
-
-                session.send_packet(make_file_end())
-                self.log(f"  Đã gửi xong file '{req_filename}' tới {session.username}")
-            except Exception as e:
-                self.log(f"Lỗi khi gửi file tải về cho Client #{session.client_id}: {e}")
-                session.send_packet(make_error(500, f"Lỗi đọc/truyền file trên Server: {e}"))
-
-        
-
-
-        elif t == MessageType.DISCONNECT.value:
-            reason = pkt.payload.get("reason", "")
-            self.log(f"Client #{session.client_id} yêu cầu ngắt kết nối: {reason}")
-            session.connected = False
-
-        else:
-            self.log(f"Nhận gói không xác định: {t}")
 if __name__ == "__main__":
-    server = SecureChatServer(host="0.0.0.0", port=5000)
-    server.start()
+    args = _parse_args()
+    print("=== Secure Chat Server ===")
+    print(f"  CA:      {args.ca}")
+    print(f"  Cert:    {args.cert}")
+    print(f"  Storage: {args.storage}")
+
+    ca_cert     = pki_module.load_cert_from_file(args.ca)
+    server_cert = pki_module.load_cert_from_file(args.cert)
+    server_key  = pki_module.load_private_key_from_file(args.key)
+
+    srv = SecureChatServer(
+        host=args.host,
+        port=args.port,
+        ca_cert=ca_cert,
+        server_cert=server_cert,
+        server_key=server_key,
+        storage_dir=args.storage,
+    )
+    srv.start()
