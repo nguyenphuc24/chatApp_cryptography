@@ -28,6 +28,7 @@ chatApp_cryptography/
 │   └── make_pki.py      # Công cụ tạo Root CA, chứng chỉ server và chứng chỉ nhóm
 ├── tests/               # Toàn bộ 63 test cases tự động (unit test & integration test)
 ├── requirements.txt     # cryptography, pycryptodome
+├── HANDBOOK.md          # Cẩm nang kỹ thuật chi tiết (thiết kế, thuật toán, thư viện, debug)
 ├── KE_HOACH.md          # Kế hoạch và tài liệu đặc tả kỹ thuật
 └── README.md
 ```
@@ -62,10 +63,10 @@ Hệ thống sử dụng Root CA tự ký làm gốc tin cậy duy nhất (`pki/
 python tools/make_pki.py
 
 # 2. Tạo chứng chỉ cho Team 1 (CN=team1, UID=MSSV):
-python tools/make_pki.py --team team1 --mssv 2312345 2312346
+python tools/make_pki.py --team team1 --mssv 2412716 2412760
 
-# 3. Tạo chứng chỉ cho Team 2 (CN=team2, UID=MSSV):
-python tools/make_pki.py --team team2 --mssv 2312001 2312002
+python tools/make_pki.py --team team2 --mssv 2312716 2312760
+python tools/make_pki.py --team team3 --mssv 2512716 2512760
 ```
 
 Các file được tạo ra trong thư mục `pki/`:
@@ -86,16 +87,19 @@ Server mặc định lắng nghe tại `0.0.0.0:5000`, nạp chứng chỉ `pki/
 ### Khởi động Client Team 1:
 Mở terminal mới và chạy:
 ```bash
-python src/client.py --cert pki/team1/client.crt --key pki/team1/client.key --mssv 2312345 2312346
+python src/client.py --cert pki/team1/client.crt --key pki/team1/client.key --mssv 2412716 2412760
 ```
 
 ### Khởi động Client Team 2:
 Mở terminal tiếp theo và chạy:
 ```bash
-python src/client.py --cert pki/team2/client.crt --key pki/team2/client.key --mssv 2312001 2312002
+python src/client.py --cert pki/team2/client.crt --key pki/team2/client.key --mssv 2312716 2312760
+
+python src/client.py --cert pki/team3/client.crt --key pki/team3/client.key --mssv 2512716 2512760
+
 ```
 
-Trạng thái E2E (số thứ tự gửi và replay-map) được lưu tự động vào `.client_state/<CN>_state.json` sau mỗi lần gửi; khi khởi động lại, client nạp lại trạng thái cũ, đảm bảo seq luôn tăng và không bao giờ tái sử dụng.
+Trạng thái E2E (số thứ tự đã gửi) được lưu tự động vào `.client_state/<CN>_state.json` sau mỗi lần gửi. Khi khởi động lại, client nạp lại seq cũ và so với timestamp hiện tại, chọn giá trị lớn hơn — đảm bảo seq luôn tăng và không bao giờ tái sử dụng. `last_msg_seq` (replay map phía nhận) chỉ lưu trong bộ nhớ vì server không lưu lịch sử tin nhắn.
 
 ---
 
@@ -132,8 +136,8 @@ Các mục dưới đây được triển khai vượt yêu cầu đề bài, d�
 |---|---|---|---|
 | 1 | **Path traversal khi nhận file** | `client.py` `_finalize_recv_file` | `validate_filename()` kiểm tra whitelist `[A-Za-z0-9._-]`, sau đó `os.path.realpath` xác nhận đường dẫn cuối cùng nằm trong `downloads/` |
 | 2 | **Chunk order binding vào MAC** | `e2e.py` `e2e_prepare_file` | Mỗi chunk EtM trên `struct.pack("!I", i) + chunk_bytes`; hoán đổi thứ tự chunk → HMAC sai → bị từ chối |
-| 3 | **E2E seq không tồn tại qua restart** | `client.py` `_load_state`/`_save_state` | Lưu `sent_msg_seq`, `sent_file_seq`, `last_msg_seq`, `last_file_seq` vào `.client_state/<CN>_state.json` (ghi nguyên tử qua `.tmp`); nạp lại khi khởi động |
-| 4 | **X.509 KeyUsage không kiểm tra** | `pki.py` `verify_cert` | Kiểm tra extension `KeyUsage`: leaf certificate phải có `digitalSignature`; server cert thêm `keyEncipherment` |
+| 3 | **E2E seq bền qua restart** | `client.py` `_load_state`/`_save_state` | Lưu `sent_msg_seq`, `sent_file_seq` vào `.client_state/<CN>_state.json` (ghi nguyên tử qua `.tmp`); nạp lại khi khởi động; dùng `max(saved, now_ms)` làm seq mới |
+| 4 | **X.509 KeyUsage không kiểm tra** | `pki.py` `verify_cert` | Kiểm tra extension `KeyUsage` nếu tồn tại: cần `digitalSignature` hoặc `keyEncipherment` |
 | 5 | **State không lưu sau gửi** | `client.py` `send_msg`/`send_file` | `_save_state()` được gọi ngay sau mỗi lần gửi thành công, tránh mất seq khi crash |
 
 ---
@@ -163,3 +167,14 @@ Các mục dưới đây được triển khai vượt yêu cầu đề bài, d�
 11. `test_files_server.py`: Chặn path traversal (`../`), lọc tên file nguy hiểm, tự động đổi tên `file (1).ext` chống ghi đè, dọn dẹp file tạm `.tmp_*` khi lỗi.
 12. `test_mitm_demo.py`: Mô phỏng kịch bản tấn công Man-in-the-Middle (thay thế chứng chỉ và can thiệp byte trên đường truyền), ghi nhận kết quả phòng thủ thành công.
 13. `test_integration_tcp.py`: Kiểm thử tích hợp toàn diện trên kết nối TCP thật với Server, 2 Client, trao đổi chat E2E và file E2E.
+
+---
+
+## 9. Tài liệu kỹ thuật chi tiết
+
+Xem **[HANDBOOK.md](HANDBOOK.md)** để có cẩm nang đầy đủ bao gồm:
+- Thiết kế giao thức từng lớp (framing → PKI → handshake → record → E2E)
+- Giải thích lý do chọn mỗi thuật toán (EtM, OAEP, PSS, KDF...)
+- Hướng dẫn sử dụng thư viện `cryptography`, `pycryptodome`, `struct`, `socket`
+- Danh sách các lỗi đã gặp và cách khắc phục chi tiết
+- Bảng tóm tắt mọi quyết định thiết kế

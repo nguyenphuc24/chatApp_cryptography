@@ -26,7 +26,7 @@ import time
 import uuid
 from datetime import datetime
 
-# Thêm src/ vào path để import các module cùng thư mục
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import framing
@@ -50,7 +50,7 @@ DEFAULT_KEY     = os.path.join(BASE_DIR, "pki", "server.key")
 DEFAULT_STORAGE = os.path.join(BASE_DIR, "server_storage")
 
 
-# ─── Đổi tên file không trùng ─────────────────────────────────────────────────
+
 
 def _unique_name(storage_dir: str, name: str) -> str:
     """Nếu <name>.json đã tồn tại, thử <name> (1).json, (2)... cho đến khi tìm được."""
@@ -63,7 +63,7 @@ def _unique_name(storage_dir: str, name: str) -> str:
     return candidate
 
 
-# ─── Server ────────────────────────────────────────────────────────────────────
+
 
 class SecureChatServer:
 
@@ -85,9 +85,9 @@ class SecureChatServer:
         os.makedirs(self.storage_dir, exist_ok=True)
 
         self._lock   = threading.Lock()
-        # sessions: {cn: Session}  — chỉ client đã handshake thành công
+        
         self._sessions: dict[str, Session] = {}
-        # known_certs: {cn: x509.Certificate} — tất cả cert đã thấy
+        
         self._known_certs: dict[str, object] = {}
 
     def log(self, msg: str) -> None:
@@ -98,7 +98,7 @@ class SecureChatServer:
         except UnicodeEncodeError:
             print(f"[{ts}] [Server] {safe_msg.encode('ascii', errors='backslashreplace').decode('ascii')}")
 
-    # ── Vòng lặp chính ────────────────────────────────────────────────────────
+    
 
     def start(self) -> None:
         srv = __import__("socket").socket()
@@ -137,7 +137,7 @@ class SecureChatServer:
             except Exception:
                 pass
 
-    # ── Xử lý từng client ─────────────────────────────────────────────────────
+    
 
     def _handle_client(self, conn, addr) -> None:
         peer = f"{addr[0]}:{addr[1]}"
@@ -180,7 +180,7 @@ class SecureChatServer:
 
     def _dispatch_loop(self, session: Session) -> None:
         """Vòng lặp nhận và điều phối gói tin từ một client."""
-        upload: dict | None = None   # {'meta': ..., 'chunks': [...], 'tmp': str}
+        upload: dict | None = None   
 
         while not session.closed:
             pkt = session.recv()
@@ -189,13 +189,13 @@ class SecureChatServer:
 
             t       = pkt.get("type", "")
             payload = pkt.get("payload", {})
-            cn      = session.peer_cn   # Đây là sender thực sự (từ cert)
+            cn      = session.peer_cn   
 
             if t == MT_PING:
                 session.send(MT_PONG, {}, sender="server")
 
             elif t == MT_PONG:
-                pass   # heartbeat phản hồi, _last_recv đã cập nhật trong recv()
+                pass   
 
             elif t == MT_DISCONNECT:
                 break
@@ -215,7 +215,7 @@ class SecureChatServer:
                         "idx":  payload.get("idx", -1),
                         "data": payload.get("data", ""),
                     })
-                    # Kiểm tra kích thước tích luỹ (mỗi chunk hex = ~2× bytes thực)
+                    
                     total_bytes = sum(len(c["data"]) // 2 for c in upload["chunks"])
                     if total_bytes > MAX_FILE:
                         self.log(f"File từ {cn} vượt MAX_FILE — huỷ upload.")
@@ -239,7 +239,7 @@ class SecureChatServer:
             else:
                 self.log(f"Gói không xác định từ {cn}: {t}")
 
-    # ── Roster ─────────────────────────────────────────────────────────────────
+    
 
     def _handle_roster_req(self, session: Session) -> None:
         """Gửi danh sách các cert đã biết (kể cả offline; cert_pem rỗng nếu chưa lưu)."""
@@ -254,7 +254,7 @@ class SecureChatServer:
                 })
         session.send(MT_ROSTER_RESP, {"roster": roster}, sender="server")
 
-    # ── Relay E2E message ──────────────────────────────────────────────────────
+    
 
     def _relay_e2e_msg(self, session: Session, payload: dict, sender_cn: str) -> None:
         """Chuyển tiếp E2E_MSG đến mọi client khác. Không giải mã."""
@@ -266,7 +266,7 @@ class SecureChatServer:
             except Exception as exc:
                 self.log(f"Lỗi relay E2E_MSG → {tgt.peer_cn}: {exc}")
 
-    # ── File E2E ──────────────────────────────────────────────────────────────
+    
 
     def _handle_file_start(self, session: Session, payload: dict, cn: str) -> dict | None:
         """Bắt đầu nhận file E2E. Trả về upload-state dict hoặc None nếu lỗi."""
@@ -304,7 +304,7 @@ class SecureChatServer:
             }, sender="server")
             return
 
-        # Ghi tệp tạm trước
+        
         stored = {"meta": meta, "chunks": chunks, "sender": cn}
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -315,7 +315,7 @@ class SecureChatServer:
             session.send(MT_ERROR, {"code": 500, "message": "Lỗi ghi file tạm"}, sender="server")
             return
 
-        # Đổi tên sang tên cuối (tránh ghi đè)
+        
         final_name = _unique_name(self.storage_dir, name)
         final_path = os.path.join(self.storage_dir, final_name + ".json")
         try:
@@ -338,7 +338,7 @@ class SecureChatServer:
             except Exception:
                 pass
 
-    # ── File list ─────────────────────────────────────────────────────────────
+    
 
     def _handle_file_list(self, session: Session) -> None:
         files = []
@@ -362,11 +362,11 @@ class SecureChatServer:
             self.log(f"Lỗi đọc danh sách file: {exc}")
         session.send(MT_FILE_LIST_RESP, {"files": files}, sender="server")
 
-    # ── File download ──────────────────────────────────────────────────────────
+    
 
     def _handle_file_get(self, session: Session, payload: dict, cn: str) -> None:
         req_name = payload.get("name", "")
-        # Tìm file khớp tên gốc (meta.name)
+        
         found_path = None
         try:
             for fname in os.listdir(self.storage_dir):
@@ -398,16 +398,16 @@ class SecureChatServer:
         chunks = data.get("chunks", [])
         sender = data.get("sender", "")
 
-        # Gửi START
+        
         session.send(MT_FILE_E2E_START, {"meta": meta}, sender=sender)
-        # Gửi từng chunk
+        
         for chunk in chunks:
             session.send(MT_FILE_E2E_CHUNK, chunk, sender=sender)
-        # Gửi END
+        
         session.send(MT_FILE_E2E_END, {"chunks": len(chunks)}, sender=sender)
         self.log(f"Đã gửi file '{req_name}' cho {cn}.")
 
-    # ── Broadcast hệ thống ─────────────────────────────────────────────────────
+    
 
     def _broadcast_sys(self, text: str, exclude_cn: str = "") -> None:
         with self._lock:
@@ -419,7 +419,7 @@ class SecureChatServer:
                 pass
 
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+
 
 def _parse_args():
     p = argparse.ArgumentParser(description="Secure Chat Server")

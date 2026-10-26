@@ -90,32 +90,38 @@ class SecureChatClient:
         self._recv_file_chunks: list        = []
 
     def _load_state(self) -> None:
-        """Nạp trạng thái seq và last_seq từ đĩa để chống replay và duy trì seq qua khởi động lại."""
+        """Nạp seq đã gửi từ đĩa để đảm bảo seq không bao giờ lùi qua khởi động lại.
+        last_msg_seq và last_file_seq chỉ lưu trong bộ nhớ (reset khi restart là đúng vì
+        server không lưu lịch sử tin nhắn, nên không thể replay tin cũ sau restart).
+        """
         now_ms = int(time.time() * 1000)
-        self._e2e_seq = now_ms
+        self._e2e_seq      = now_ms
         self._e2e_file_seq = now_ms
         if self._state_file and os.path.exists(self._state_file):
             try:
                 with open(self._state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                saved_msg_seq = data.get("sent_msg_seq", 0)
+                saved_msg_seq  = data.get("sent_msg_seq", 0)
                 saved_file_seq = data.get("sent_file_seq", 0)
-                self._e2e_seq = max(saved_msg_seq, now_ms)
-                self._e2e_file_seq = max(saved_file_seq, now_ms)
-                self._last_msg_seq = data.get("last_msg_seq", {})
-                self._last_file_seq = data.get("last_file_seq", {})
+                # Chỉ lấy saved seq nếu nó hợp lý (không quá xa tương lai)
+                max_future_ms = now_ms + 86_400_000  # tối đa 24h trong tương lai
+                if saved_msg_seq < max_future_ms:
+                    self._e2e_seq = max(saved_msg_seq, now_ms)
+                if saved_file_seq < max_future_ms:
+                    self._e2e_file_seq = max(saved_file_seq, now_ms)
             except Exception:
                 pass
 
     def _save_state(self) -> None:
-        """Lưu trạng thái seq và last_seq ra đĩa an toàn."""
+        """Lưu seq đã gửi ra đĩa an toàn (atomic write qua .tmp)."""
         if not self._state_file:
             return
         state = {
-            "sent_msg_seq": self._e2e_seq,
+            "sent_msg_seq":  self._e2e_seq,
             "sent_file_seq": self._e2e_file_seq,
-            "last_msg_seq": self._last_msg_seq,
-            "last_file_seq": self._last_file_seq,
+            # last_msg_seq / last_file_seq không lưu:
+            # server không có persistent relay nên tin cũ không thể
+            # bị phát lại sau khi người nhận khởi động lại.
         }
         try:
             tmp = self._state_file + ".tmp"
@@ -446,16 +452,20 @@ def _parse_args():
 
 if __name__ == "__main__":
     args = _parse_args()
-    ca_cert     = pki_module.load_cert_from_file(args.ca)
-    client_cert = pki_module.load_cert_from_file(args.cert)
-    client_key  = pki_module.load_private_key_from_file(args.key)
-
-    cli = SecureChatClient(
-        host=args.host,
-        port=args.port,
-        ca_cert=ca_cert,
-        client_cert=client_cert,
-        client_key=client_key,
-        mssv_list=args.mssv,
-    )
-    cli.run()
+    try:
+        ca_cert     = pki_module.load_cert_from_file(args.ca)
+        client_cert = pki_module.load_cert_from_file(args.cert)
+        client_key  = pki_module.load_private_key_from_file(args.key)
+        cli = SecureChatClient(
+                host=args.host,
+                port=args.port,
+                ca_cert=ca_cert,
+                client_cert=client_cert,
+                client_key=client_key,
+                mssv_list=args.mssv,
+            )
+        cli.run()
+    except Exception as e:
+        print(e)
+    
+    

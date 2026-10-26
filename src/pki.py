@@ -33,8 +33,11 @@ def load_cert(pem: bytes) -> x509.Certificate:
 
 def load_cert_from_file(path: str) -> x509.Certificate:
     """Nạp chứng chỉ từ file PEM."""
-    with open(path, "rb") as f:
-        return load_cert(f.read())
+    try:     
+        with open(path, "rb") as f:
+            return load_cert(f.read())
+    except Exception as e:
+        print("Chưa đăng kí cert với CA")
 
 
 def load_private_key(pem: bytes, password=None):

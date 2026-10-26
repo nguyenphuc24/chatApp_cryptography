@@ -8,3 +8,5 @@ downloads/
 *.key
 pki/**/*.key
 pki/*.key
+pki/
+.client_state/
