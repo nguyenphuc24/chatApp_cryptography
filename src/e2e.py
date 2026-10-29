@@ -152,7 +152,6 @@ def e2e_decrypt_msg(
     # 3. Chống replay E2E (seq phải tăng dần)
     if seq <= last_seq.get(sender_cn, 0):
         return None
-    last_seq[sender_cn] = seq
 
     # 4. Lấy wrap của bản thân
     my_wrap_hex = wraps.get(my_cn)
@@ -169,6 +168,8 @@ def e2e_decrypt_msg(
     if plaintext is None:
         return None
 
+    # Chỉ cập nhật seq khi giải mã và xác thực thành công hoàn toàn
+    last_seq[sender_cn] = seq
     return plaintext.decode()
 
 
@@ -290,7 +291,6 @@ def e2e_assemble_file(
     # 3. Chống replay E2E file
     if seq <= last_file_seq.get(sender_cn, 0):
         return None
-    last_file_seq[sender_cn] = seq
 
     # 4. Giải mã wrap → K
     my_wrap_hex = wraps.get(my_cn)
@@ -328,4 +328,5 @@ def e2e_assemble_file(
     if sha256_hex(file_data) != sha256_expected:
         return None  # Nội dung bị hỏng
 
+    last_file_seq[sender_cn] = seq
     return file_data

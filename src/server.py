@@ -20,6 +20,7 @@ Chạy:
 import argparse
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -89,6 +90,8 @@ class SecureChatServer:
         self._sessions: dict[str, Session] = {}
         
         self._known_certs: dict[str, object] = {}
+        self._running = False
+        self._srv = None
 
     def log(self, msg: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
@@ -101,17 +104,23 @@ class SecureChatServer:
     
 
     def start(self) -> None:
-        srv = __import__("socket").socket()
-        srv.setsockopt(__import__("socket").SOL_SOCKET, __import__("socket").SO_REUSEADDR, 1)
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind((self.host, self.port))
         srv.listen(10)
+        # Timeout 1.0s giúp accept() không block vô tận trên Windows,
+        # cho phép nhận tín hiệu Ctrl+C và kiểm tra cờ self._running.
+        srv.settimeout(1.0)
         self._srv = srv
+        self._running = True
         self.log(f"Lắng nghe tại {self.host}:{self.port}")
 
         try:
-            while True:
+            while self._running:
                 try:
                     conn, addr = srv.accept()
+                except (socket.timeout, TimeoutError):
+                    continue
                 except OSError:
                     break
                 conn.settimeout(60)
@@ -122,20 +131,40 @@ class SecureChatServer:
                 )
                 t.start()
         except KeyboardInterrupt:
-            self.log("Tắt server.")
+            self.log("Nhận tín hiệu dừng (Ctrl+C). Đang tắt server an toàn...")
         finally:
-            try:
-                srv.close()
-            except Exception:
-                pass
+            self.stop()
 
     def stop(self) -> None:
-        """Đóng server socket để thoát vòng lặp accept."""
+        """Đóng server an toàn: ngắt kết nối các client, đóng socket và giải phóng tài nguyên."""
+        if not self._running and self._srv is None:
+            return
+        self._running = False
+
+        # 1. Đóng server listening socket để unblock accept loop
         if hasattr(self, "_srv") and self._srv:
             try:
                 self._srv.close()
             except Exception:
                 pass
+            self._srv = None
+
+        # 2. Thông báo và đóng toàn bộ client sessions đang kết nối
+        with self._lock:
+            active_sessions = list(self._sessions.values())
+            self._sessions.clear()
+
+        for s in active_sessions:
+            try:
+                s.send(MT_DISCONNECT, {"reason": "Server shutdown"}, sender="server")
+            except Exception:
+                pass
+            try:
+                s.close()
+            except Exception:
+                pass
+
+        self.log("Đã tắt server an toàn.")
 
     
 
@@ -163,6 +192,7 @@ class SecureChatServer:
                 self._known_certs[cn] = session.peer_cert_pem
 
         self._broadcast_sys(f"{cn} đã tham gia.", exclude_cn=cn)
+        self._broadcast_roster()
 
         try:
             self._dispatch_loop(session)
@@ -177,6 +207,7 @@ class SecureChatServer:
                 pass
             self.log(f"{cn} đã ngắt kết nối.")
             self._broadcast_sys(f"{cn} đã rời.", exclude_cn=cn)
+            self._broadcast_roster()
 
     def _dispatch_loop(self, session: Session) -> None:
         """Vòng lặp nhận và điều phối gói tin từ một client."""
@@ -253,6 +284,24 @@ class SecureChatServer:
                     "online":   cn in online_set,
                 })
         session.send(MT_ROSTER_RESP, {"roster": roster}, sender="server")
+
+    def _broadcast_roster(self) -> None:
+        """Phát sóng danh sách Roster cập nhật kèm cert_pem cho mọi client online."""
+        with self._lock:
+            online_set = set(self._sessions.keys())
+            roster = []
+            for cn, cert_pem in self._known_certs.items():
+                roster.append({
+                    "cn":       cn,
+                    "cert_pem": cert_pem if isinstance(cert_pem, str) else "",
+                    "online":   cn in online_set,
+                })
+            targets = list(self._sessions.values())
+        for tgt in targets:
+            try:
+                tgt.send(MT_ROSTER_RESP, {"roster": roster, "silent": True}, sender="server")
+            except Exception:
+                pass
 
     
 
@@ -434,10 +483,14 @@ def _parse_args():
 
 if __name__ == "__main__":
     args = _parse_args()
-    print("=== Secure Chat Server ===")
-    print(f"  CA:      {args.ca}")
-    print(f"  Cert:    {args.cert}")
-    print(f"  Storage: {args.storage}")
+    print("=" * 60)
+    print(" SECURE CHAT SERVER")
+    print(f"  Lắng nghe : {args.host}:{args.port}")
+    print(f"  CA        : {args.ca}")
+    print(f"  Cert      : {args.cert}")
+    print(f"  Storage   : {args.storage}")
+    print("  Lệnh console: 'exit' hoặc 'quit' để tắt an toàn | hoặc nhấn Ctrl+C")
+    print("=" * 60)
 
     ca_cert     = pki_module.load_cert_from_file(args.ca)
     server_cert = pki_module.load_cert_from_file(args.cert)
@@ -451,4 +504,42 @@ if __name__ == "__main__":
         server_key=server_key,
         storage_dir=args.storage,
     )
-    srv.start()
+
+    # Chạy server trong thread nền để console có thể nhận lệnh
+    srv_thread = threading.Thread(target=srv.start, daemon=True, name="server_accept")
+    srv_thread.start()
+
+    try:
+        if sys.stdin and sys.stdin.isatty():
+            while srv_thread.is_alive():
+                try:
+                    line = input("> ").strip()
+                except EOFError:
+                    break
+                if not line:
+                    continue
+                cmd = line.lower()
+                if cmd in ("exit", "quit", "stop", "q"):
+                    print("[Server] Đang tắt máy chủ theo yêu cầu...")
+                    break
+                elif cmd in ("status", "info"):
+                    with srv._lock:
+                        online = list(srv._sessions.keys())
+                    print(f"[Server] Trạng thái: Đang hoạt động | Clients online ({len(online)}): {', '.join(online) or '(trống)'}")
+                elif cmd in ("roster", "clients"):
+                    with srv._lock:
+                        online = list(srv._sessions.keys())
+                    print(f"[Server] Danh sách client đang kết nối: {online}")
+                elif cmd == "help":
+                    print("Các lệnh khả dụng: exit / quit / status / clients")
+                else:
+                    print(f"Lệnh không xác định: '{line}'. Gõ 'exit' để dừng server.")
+        else:
+            while srv_thread.is_alive():
+                time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\n[Server] Nhận Ctrl+C. Đang tắt...")
+    finally:
+        srv.stop()
+        srv_thread.join(timeout=2.0)
+        print("[Server] Đã thoát hoàn tất.")

@@ -83,6 +83,8 @@ Các file được tạo ra trong thư mục `pki/`:
 python src/server.py
 ```
 Server mặc định lắng nghe tại `0.0.0.0:5000`, nạp chứng chỉ `pki/server.crt` và khoá `pki/server.key`.
+- **Thoát an toàn (Graceful Shutdown):** Gõ `exit` (hoặc `quit` / `stop`) tại console server hoặc nhấn `Ctrl+C`. Server sẽ gửi gói `MT_DISCONNECT` giải phóng toàn bộ client đang kết nối, đóng listening socket và thoát an toàn.
+- **Lệnh quản trị console:** `status` (xem trạng thái), `clients` (xem danh sách nhóm đang online).
 
 ### Khởi động Client Team 1:
 Mở terminal mới và chạy:
@@ -94,9 +96,6 @@ python src/client.py --cert pki/team1/client.crt --key pki/team1/client.key --ms
 Mở terminal tiếp theo và chạy:
 ```bash
 python src/client.py --cert pki/team2/client.crt --key pki/team2/client.key --mssv 2312716 2312760
-
-python src/client.py --cert pki/team3/client.crt --key pki/team3/client.key --mssv 2512716 2512760
-
 ```
 
 Trạng thái E2E (số thứ tự đã gửi) được lưu tự động vào `.client_state/<CN>_state.json` sau mỗi lần gửi. Khi khởi động lại, client nạp lại seq cũ và so với timestamp hiện tại, chọn giá trị lớn hơn — đảm bảo seq luôn tăng và không bao giờ tái sử dụng. `last_msg_seq` (replay map phía nhận) chỉ lưu trong bộ nhớ vì server không lưu lịch sử tin nhắn.

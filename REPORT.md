@@ -12,8 +12,7 @@
 
 | STT | MSSV | Họ và tên | Vai trò / Nhiệm vụ chính | Tỷ lệ hoàn thành |
 | :---: | :---: | :--- | :--- | :---: |
-| 1 | 2412716 | Nguyễn Văn Phúc | Trưởng nhóm: Kiến trúc hệ thống, Giao thức Bắt tay, PKI & X.509, Kiểm thử MitM & Replay | 100% |
-| 2 | 2412760 | Đỗ Hoàng Quốc Việt | Thành viên: Mã hóa đầu cuối (E2E Chat & File Transfer), Record Layer, Benchmarking | 100% |
+
 
 **Giảng viên hướng dẫn:** TS. Nguyễn Văn A *(hoặc thông tin GVHD phụ trách)*  
 **Thời gian thực hiện:** Tháng 10/2026  

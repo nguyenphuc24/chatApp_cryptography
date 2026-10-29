@@ -22,6 +22,18 @@ import threading
 import time
 from datetime import datetime
 
+# Đảm bảo console Windows hỗ trợ UTF-8 không ném UnicodeEncodeError
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import handshake as hs
@@ -131,13 +143,24 @@ class SecureChatClient:
         except Exception:
             pass
 
+    def safe_print(self, msg: str, prompt: bool = True) -> None:
+        """In an toàn trên mọi hệ điều hành (không bao giờ crash do UnicodeEncodeError)."""
+        tail = "\n> " if prompt else "\n"
+        full = f"{msg}{tail}"
+        try:
+            print(full, end="", flush=True)
+        except UnicodeEncodeError:
+            try:
+                encoded = full.encode(sys.stdout.encoding or "ascii", errors="backslashreplace")
+                sys.stdout.buffer.write(encoded)
+                sys.stdout.buffer.flush()
+            except Exception:
+                pass
+
     def log(self, msg: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
         safe_msg = sanitize(msg)
-        try:
-            print(f"\n[{ts}] {safe_msg}\n> ", end="", flush=True)
-        except UnicodeEncodeError:
-            print(f"\n[{ts}] {safe_msg.encode('ascii', errors='backslashreplace').decode('ascii')}\n> ", end="", flush=True)
+        self.safe_print(f"\n[{ts}] {safe_msg}")
 
     # ── Kết nối và handshake ──────────────────────────────────────────────────
 
@@ -148,7 +171,7 @@ class SecureChatClient:
             sock.settimeout(60)
             sock.connect((self.host, self.port))
         except Exception as exc:
-            print(f"[Lỗi] Không thể kết nối: {exc}")
+            self.safe_print(f"[Lỗi] Không thể kết nối: {exc}", prompt=False)
             return False
 
         try:
@@ -156,14 +179,14 @@ class SecureChatClient:
                 sock, self.ca_cert, self.client_cert, self.client_key, self.mssv_list
             )
         except Exception as exc:
-            print(f"[Lỗi] Handshake thất bại: {exc}")
+            self.safe_print(f"[Lỗi] Handshake thất bại: {exc}", prompt=False)
             try:
                 sock.close()
             except Exception:
                 pass
             return False
 
-        print(f"\n[✓] Handshake thành công. Kênh EtM đã thiết lập. CN={self.my_cn}")
+        self.safe_print(f"\n[+] Handshake thành công. Kênh EtM đã thiết lập. CN={self.my_cn}", prompt=False)
         return True
 
     # ── Nhận tin nền ──────────────────────────────────────────────────────────
@@ -172,9 +195,12 @@ class SecureChatClient:
         while self.session and not self.session.closed:
             pkt = self.session.recv()
             if pkt is None:
-                print("\n[!] Mất kết nối với server.\n> ", end="", flush=True)
+                self.safe_print("\n[!] Mất kết nối với server.")
                 break
-            self._handle_packet(pkt)
+            try:
+                self._handle_packet(pkt)
+            except Exception as exc:
+                self.log(f"Lỗi xử lý gói tin: {exc}")
 
     def _handle_packet(self, pkt: dict) -> None:
         t       = pkt.get("type", "")
@@ -190,12 +216,25 @@ class SecureChatClient:
         elif t == MT_PONG:
             pass
 
+        elif t == MT_DISCONNECT:
+            reason = sanitize(payload.get("reason", "Máy chủ đã ngắt kết nối"))
+            self.safe_print(f"\n[!] {reason}.")
+            if self.session:
+                self.session.close()
+
         elif t == MT_SYS_MSG:
             text = sanitize(payload.get("text", ""))
-            print(f"\n[Server] {text}\n> ", end="", flush=True)
+            self.safe_print(f"\n[Server] {text}")
+            # Tự động đồng bộ roster khi có client tham gia / rời
+            if ("đã tham gia" in text or "đã rời" in text) and self.session and not self.session.closed:
+                try:
+                    self.session.send(MT_ROSTER_REQ, {}, sender=self.my_cn)
+                except Exception:
+                    pass
 
         elif t == MT_ROSTER_RESP:
-            self._process_roster(payload.get("roster", []))
+            silent = payload.get("silent", False)
+            self._process_roster(payload.get("roster", []), silent=silent)
 
         elif t == MT_E2E_MSG:
             self._handle_e2e_msg(payload, sender)
@@ -206,8 +245,7 @@ class SecureChatClient:
             self._recv_file_chunks = []
             fname = sanitize(self._recv_file_meta.get("name", "?"))
             fsize = self._recv_file_meta.get("size", 0)
-            print(f"\n[File] Nhận file '{fname}' ({fsize:,} bytes) từ {sanitize(sender)}...\n> ",
-                  end="", flush=True)
+            self.safe_print(f"\n[File] Nhận file '{fname}' ({fsize:,} bytes) từ {sanitize(sender)}...")
 
         elif t == MT_FILE_E2E_CHUNK:
             if self._recv_file_meta is not None:
@@ -233,16 +271,16 @@ class SecureChatClient:
                 sender2 = sanitize(item.get("sender", "?"))
                 lines.append(f"  • {name:<30} {size:>10,} bytes  (từ {sender2})")
             lines.append("==================================")
-            print("\n".join(lines) + "\n> ", end="", flush=True)
+            self.safe_print("\n".join(lines))
 
         elif t == MT_ERROR:
             code = payload.get("code", 0)
             msg  = sanitize(payload.get("message", ""))
-            print(f"\n[!] Lỗi server [{code}]: {msg}\n> ", end="", flush=True)
+            self.safe_print(f"\n[!] Lỗi server [{code}]: {msg}")
 
     # ── Roster ─────────────────────────────────────────────────────────────────
 
-    def _process_roster(self, roster_list: list) -> None:
+    def _process_roster(self, roster_list: list, silent: bool = False) -> None:
         self._roster_raw = roster_list
         self._roster = {}
         for item in roster_list:
@@ -255,13 +293,14 @@ class SecureChatClient:
                     self._roster[cn] = cert
                 except Exception:
                     pass   # Cert không hợp lệ → bỏ qua
-        lines = ["\n=== Roster ==="]
-        for item in roster_list:
-            cn     = sanitize(item.get("cn", ""))
-            online = "● online" if item.get("online") else "○ offline"
-            lines.append(f"  {online}  {cn}")
-        lines.append("==============")
-        print("\n".join(lines) + "\n> ", end="", flush=True)
+        if not silent:
+            lines = ["\n=== Roster ==="]
+            for item in roster_list:
+                cn     = sanitize(item.get("cn", ""))
+                online = "[ON] online" if item.get("online") else "[OFF] offline"
+                lines.append(f"  {online}  {cn}")
+            lines.append("==============")
+            self.safe_print("\n".join(lines))
 
     # ── Giải mã E2E chat ───────────────────────────────────────────────────────
 
@@ -271,9 +310,15 @@ class SecureChatClient:
             self._roster, self._last_msg_seq,
         )
         if text is None:
+            # Nếu người gửi chưa có trong roster cục bộ, tự động yêu cầu roster mới
+            if sender_cn not in self._roster and self.session and not self.session.closed:
+                try:
+                    self.session.send(MT_ROSTER_REQ, {}, sender=self.my_cn)
+                except Exception:
+                    pass
             self.log(f"[CẢNH BÁO] Tin nhắn E2E từ {sanitize(sender_cn)} bị từ chối (sig/seq/wrap lỗi).")
             return
-        print(f"\n[{sanitize(sender_cn)}] {sanitize(text)}\n> ", end="", flush=True)
+        self.safe_print(f"\n[{sanitize(sender_cn)}] {sanitize(text)}")
 
     # ── Giải mã E2E file ───────────────────────────────────────────────────────
 
@@ -287,7 +332,7 @@ class SecureChatClient:
         try:
             filename = validate_filename(sanitize(raw_name))
         except ValueError as exc:
-            print(f"\n[!] Từ chối file: tên không hợp lệ ({exc}).\n> ", end="", flush=True)
+            self.safe_print(f"\n[!] Từ chối file: tên không hợp lệ ({exc}).")
             return
 
         file_data = e2e_assemble_file(
@@ -295,16 +340,14 @@ class SecureChatClient:
             self._roster, sender_cn, self._last_file_seq,
         )
         if file_data is None:
-            print(f"\n[!] File '{filename}' bị từ chối (chữ ký / SHA-256 / chunk không hợp lệ).\n> ",
-                  end="", flush=True)
+            self.safe_print(f"\n[!] File '{filename}' bị từ chối (chữ ký / SHA-256 / chunk không hợp lệ).")
             return
 
         # Xây dựng đường dẫn lưu và đảm bảo nằm trong DOWNLOAD_DIR
         save_path = os.path.realpath(os.path.join(DOWNLOAD_DIR, filename))
         dl_real   = os.path.realpath(DOWNLOAD_DIR)
         if not save_path.startswith(dl_real + os.sep) and save_path != dl_real:
-            print(f"\n[!] Từ chối file: đường dẫn vượt ra ngoài thư mục tải về.\n> ",
-                  end="", flush=True)
+            self.safe_print(f"\n[!] Từ chối file: đường dẫn vượt ra ngoài thư mục tải về.")
             return
 
         # Tránh ghi đè file đã có ở phía client
@@ -320,13 +363,18 @@ class SecureChatClient:
         with open(save_path, "wb") as f:
             f.write(file_data)
         self._save_state()
-        print(f"\n[✓] File '{filename}' đã tải về: {save_path}\n> ", end="", flush=True)
+        self.safe_print(f"\n[+] File '{filename}' đã tải về: {save_path}")
 
     # ── Gửi ───────────────────────────────────────────────────────────────────
 
     def send_msg(self, message: str) -> None:
         if not self._roster:
-            self.log("Roster trống. Dùng !roster để lấy danh sách người nhận.")
+            if self.session and not self.session.closed:
+                try:
+                    self.session.send(MT_ROSTER_REQ, {}, sender=self.my_cn)
+                except Exception:
+                    pass
+            self.log("Roster trống. Đang lấy danh sách người nhận từ server, vui lòng thử lại sau giây lát.")
             return
         with self._e2e_lock:
             self._e2e_seq += 1
