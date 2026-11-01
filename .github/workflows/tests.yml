@@ -17,4 +17,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -r requirements.txt
+      - run: python src/client.py --cert pki/team1/client.crt --key pki/team1/client.key --mssv 2412716 2412760
+      - run: python src/client.py --cert pki/team2/client.crt --key pki/team2/client.key --mssv 2312716 2312760
       - run: python -m unittest discover -s tests -v
