@@ -10,8 +10,8 @@ Lệnh:
     exit                    Thoát
 
 Chạy:
-    python src/client.py
-    python src/client.py --ca pki/ca.crt --cert pki/team1/client.crt --key pki/team1/client.key --mssv 2312345 2312346
+    python srcs/client.py
+    python srcs/client.py --ca pki/ca.crt --cert pki/team1/client.crt --key pki/team1/client.key --mssv 2312345 2312346
 """
 
 import argparse
@@ -89,6 +89,7 @@ class SecureChatClient:
 
         # Seq E2E và chống replay
         self._e2e_lock     = threading.Lock()
+        self._state_lock   = threading.Lock()
         self._last_msg_seq:  dict[str, int] = {}
         self._last_file_seq: dict[str, int] = {}
 
@@ -115,6 +116,8 @@ class SecureChatClient:
                     data = json.load(f)
                 saved_msg_seq  = data.get("sent_msg_seq", 0)
                 saved_file_seq = data.get("sent_file_seq", 0)
+                self._last_msg_seq  = dict(data.get("recv_msg_seq", {}))
+                self._last_file_seq = dict(data.get("recv_file_seq", {}))
                 # Chỉ lấy saved seq nếu nó hợp lý (không quá xa tương lai)
                 max_future_ms = now_ms + 86_400_000  # tối đa 24h trong tương lai
                 if saved_msg_seq < max_future_ms:
@@ -128,20 +131,22 @@ class SecureChatClient:
         """Lưu seq đã gửi ra đĩa an toàn (atomic write qua .tmp)."""
         if not self._state_file:
             return
-        state = {
-            "sent_msg_seq":  self._e2e_seq,
-            "sent_file_seq": self._e2e_file_seq,
-            # last_msg_seq / last_file_seq không lưu:
-            # server không có persistent relay nên tin cũ không thể
-            # bị phát lại sau khi người nhận khởi động lại.
-        }
-        try:
-            tmp = self._state_file + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False)
-            os.replace(tmp, self._state_file)
-        except Exception:
-            pass
+        with self._state_lock:
+            state = {
+                "sent_msg_seq":  self._e2e_seq,
+                "sent_file_seq": self._e2e_file_seq,
+                "recv_msg_seq":  dict(self._last_msg_seq),
+                "recv_file_seq": dict(self._last_file_seq),
+            }
+            try:
+                tmp = self._state_file + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(state, f, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self._state_file)
+            except Exception:
+                pass
 
     def safe_print(self, msg: str, prompt: bool = True) -> None:
         """In an toàn trên mọi hệ điều hành (không bao giờ crash do UnicodeEncodeError)."""
@@ -289,7 +294,7 @@ class SecureChatClient:
             if cn and cert_pem:
                 try:
                     cert = pki_module.load_cert(cert_pem.encode())
-                    pki_module.verify_cert(cert, self.ca_cert)
+                    pki_module.verify_cert(cert, self.ca_cert, usage="client")
                     self._roster[cn] = cert
                 except Exception:
                     pass   # Cert không hợp lệ → bỏ qua
@@ -318,6 +323,7 @@ class SecureChatClient:
                     pass
             self.log(f"[CẢNH BÁO] Tin nhắn E2E từ {sanitize(sender_cn)} bị từ chối (sig/seq/wrap lỗi).")
             return
+        self._save_state()
         self.safe_print(f"\n[{sanitize(sender_cn)}] {sanitize(text)}")
 
     # ── Giải mã E2E file ───────────────────────────────────────────────────────
@@ -362,6 +368,8 @@ class SecureChatClient:
 
         with open(save_path, "wb") as f:
             f.write(file_data)
+            f.flush()
+            os.fsync(f.fileno())
         self._save_state()
         self.safe_print(f"\n[+] File '{filename}' đã tải về: {save_path}")
 

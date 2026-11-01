@@ -12,7 +12,7 @@ import sys
 import threading
 import unittest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 import framing
@@ -97,7 +97,7 @@ class TestMitMDemo(unittest.TestCase):
 
         def run_server():
             nonlocal s_session
-            s_session = handshake.server_handshake(
+            s_session, _ = handshake.server_handshake(
                 s_sock, self.trusted_ca_cert, self.real_srv_cert, self.real_srv_key
             )
 

@@ -13,8 +13,8 @@ Chức năng:
   - Giới hạn kích thước file: MAX_FILE = 10 MiB.
 
 Chạy:
-  python src/server.py
-  python src/server.py --ca pki/ca.crt --cert pki/server.crt --key pki/server.key
+  python srcs/server.py
+  python srcs/server.py --ca pki/ca.crt --cert pki/server.crt --key pki/server.key
 """
 
 import argparse
@@ -66,6 +66,10 @@ def _unique_name(storage_dir: str, name: str) -> str:
 
 
 
+MAX_CONNECTIONS   = 64
+MAX_STORAGE_BYTES = 200 * 1024 * 1024
+
+
 class SecureChatServer:
 
     def __init__(
@@ -90,6 +94,7 @@ class SecureChatServer:
         self._sessions: dict[str, Session] = {}
         
         self._known_certs: dict[str, object] = {}
+        self._active_conns = 0
         self._running = False
         self._srv = None
 
@@ -124,8 +129,15 @@ class SecureChatServer:
                 except OSError:
                     break
                 conn.settimeout(60)
+                with self._lock:
+                    full = self._active_conns >= MAX_CONNECTIONS
+                    if not full:
+                        self._active_conns += 1
+                if full:
+                    conn.close()
+                    continue
                 t = threading.Thread(
-                    target=self._handle_client,
+                    target=self._run_client,
                     args=(conn, addr),
                     daemon=True,
                 )
@@ -168,11 +180,18 @@ class SecureChatServer:
 
     
 
+    def _run_client(self, conn, addr) -> None:
+        try:
+            self._handle_client(conn, addr)
+        finally:
+            with self._lock:
+                self._active_conns -= 1
+
     def _handle_client(self, conn, addr) -> None:
         peer = f"{addr[0]}:{addr[1]}"
         session: Session | None = None
         try:
-            session = hs.server_handshake(
+            session, handshake_message = hs.server_handshake(
                 conn, self.ca_cert, self.server_cert, self.server_key
             )
         except Exception as exc:
@@ -185,11 +204,17 @@ class SecureChatServer:
 
         cn = session.peer_cn
         self.log(f"Handshake OK: {cn} ({peer})")
-
+        self.log(f"Handshake message: {handshake_message}")
         with self._lock:
+            old = self._sessions.get(cn)
             self._sessions[cn] = session
             if session.peer_cert_pem:
                 self._known_certs[cn] = session.peer_cert_pem
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                pass
 
         self._broadcast_sys(f"{cn} đã tham gia.", exclude_cn=cn)
         self._broadcast_roster()
@@ -200,14 +225,17 @@ class SecureChatServer:
             self.log(f"Lỗi client {cn}: {exc}")
         finally:
             with self._lock:
-                self._sessions.pop(cn, None)
+                current = self._sessions.get(cn) is session
+                if current:
+                    self._sessions.pop(cn, None)
             try:
                 session.close()
             except Exception:
                 pass
             self.log(f"{cn} đã ngắt kết nối.")
-            self._broadcast_sys(f"{cn} đã rời.", exclude_cn=cn)
-            self._broadcast_roster()
+            if current:
+                self._broadcast_sys(f"{cn} đã rời.", exclude_cn=cn)
+                self._broadcast_roster()
 
     def _dispatch_loop(self, session: Session) -> None:
         """Vòng lặp nhận và điều phối gói tin từ một client."""
@@ -358,10 +386,21 @@ class SecureChatServer:
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(stored, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
         except Exception as exc:
             self.log(f"Lỗi ghi tệp tạm: {exc}")
             self._cancel_upload(upload)
             session.send(MT_ERROR, {"code": 500, "message": "Lỗi ghi file tạm"}, sender="server")
+            return
+
+        used = 0
+        for entry in os.scandir(self.storage_dir):
+            if entry.name.endswith(".json") and not entry.name.startswith(".tmp_"):
+                used += entry.stat().st_size
+        if used + os.path.getsize(tmp_path) > MAX_STORAGE_BYTES:
+            self._cancel_upload(upload)
+            session.send(MT_ERROR, {"code": 507, "message": "Hết dung lượng lưu trữ trên máy chủ"}, sender="server")
             return
 
         

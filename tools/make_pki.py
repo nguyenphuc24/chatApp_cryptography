@@ -4,14 +4,14 @@ make_pki.py – Tạo CA tự ký, chứng chỉ server và nhóm.
 
 Usage:
     # Tạo CA + server cert lần đầu:
-    python tools/make_pki.py
+    python srcs/tools/make_pki.py
 
     # Tạo thêm chứng chỉ cho nhóm:
-    python tools/make_pki.py --team team1 --mssv 2312345 2312346
+    python srcs/tools/make_pki.py --team team1 --mssv 2312345 2312346
 
     # Ghi đè nếu đã tồn tại:
-    python tools/make_pki.py --force
-    python tools/make_pki.py --team team1 --mssv 2312345 2312346 --force
+    python srcs/tools/make_pki.py --force
+    python srcs/tools/make_pki.py --team team1 --mssv 2312345 2312346 --force
 
 Kết quả lưu tại pki/ (tạo tự động):
     pki/ca.crt, pki/ca.key           ← CA tự ký
@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PKI_DIR  = os.path.join(BASE_DIR, "pki")
 
 RSA_KEY_SIZE        = 2048
@@ -54,7 +54,8 @@ def _gen_rsa_key() -> rsa.RSAPrivateKey:
 
 
 def _save_key(key, path: str) -> None:
-    with open(path, "wb") as f:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.TraditionalOpenSSL,
@@ -300,7 +301,21 @@ def main() -> None:
             sys.exit(1)
         make_team_cert(args.team, args.mssv, force=args.force)
 
+    verify_all(args.team, args.mssv)
     print("\nHoàn tất. Không đưa file *.key vào repo!")
+
+
+def verify_all(team: str | None, mssv: list) -> None:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import pki
+    ca = pki.load_cert_from_file(os.path.join(PKI_DIR, "ca.crt"))
+    pki.verify_cert(pki.load_cert_from_file(os.path.join(PKI_DIR, "server.crt")),
+                    ca, expected_cn="chat-server", usage="server")
+    if team:
+        pki.verify_cert(pki.load_cert_from_file(os.path.join(PKI_DIR, team, "client.crt")),
+                        ca, expected_cn=team, usage="client")
+    print("  [OK]   Kiểm tra lại chứng chỉ vừa tạo")
+
 
 
 if __name__ == "__main__":

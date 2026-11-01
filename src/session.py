@@ -205,6 +205,10 @@ class Session:
         """Đóng session và socket."""
         self._closed = True
         try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
             self.sock.close()
         except Exception:
             pass

@@ -104,6 +104,7 @@ def verify_cert(
     cert: x509.Certificate,
     ca_cert: x509.Certificate,
     expected_cn: str | None = None,
+    usage: str | None = None,
 ) -> None:
     """
     Kiểm tra chứng chỉ toàn diện:
@@ -160,10 +161,17 @@ def verify_cert(
 
     # 5. Kiểm tra KeyUsage (nếu có extension)
     try:
-        ku = cert.extensions.get_extension_for_class(x509.KeyUsage)
-        if not (ku.value.digital_signature or ku.value.key_encipherment):
+        ku = cert.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        if usage is not None:
+            raise ValueError("Chứng chỉ thiếu extension KeyUsage.")
+        ku = None
+    if ku is not None:
+        if not (ku.digital_signature or ku.key_encipherment):
             raise ValueError(
                 "Chứng chỉ thiếu KeyUsage phù hợp (cần digital_signature hoặc key_encipherment)."
             )
-    except x509.ExtensionNotFound:
-        pass  # Không có KeyUsage extension → chấp nhận
+        if usage == "server" and not ku.key_encipherment:
+            raise ValueError("Chứng chỉ máy chủ thiếu quyền key_encipherment.")
+        if usage == "client" and not ku.digital_signature:
+            raise ValueError("Chứng chỉ máy khách thiếu quyền digital_signature.")

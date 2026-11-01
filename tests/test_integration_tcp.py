@@ -15,7 +15,7 @@ import threading
 import time
 import unittest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 import e2e
@@ -101,14 +101,18 @@ class TestTCPIntegration(unittest.TestCase):
         bob_session = self._connect_client(self.bob_cert, self.bob_key, ["2312002"])
 
         # 2. Alice requests roster
-        alice_session.send(MT_ROSTER_REQ, {})
-        roster_pkt = self._recv_type(alice_session, MT_ROSTER_RESP)
-
         roster = {}
-        for entry in roster_pkt["payload"].get("roster", []):
-            c = pki.load_cert(entry["cert_pem"].encode())
-            pki.verify_cert(c, self.ca_cert)
-            roster[entry["cn"]] = c
+        for _ in range(100):
+            alice_session.send(MT_ROSTER_REQ, {})
+            roster_pkt = self._recv_type(alice_session, MT_ROSTER_RESP)
+            roster = {}
+            for entry in roster_pkt["payload"].get("roster", []):
+                c = pki.load_cert(entry["cert_pem"].encode())
+                pki.verify_cert(c, self.ca_cert)
+                roster[entry["cn"]] = c
+            if "bob" in roster:
+                break
+            time.sleep(0.05)
 
         self.assertIn("alice", roster)
         self.assertIn("bob", roster)

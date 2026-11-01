@@ -110,7 +110,7 @@ def client_handshake(
 
     # ── B2: Kiểm tra chứng chỉ server ────────────────────────────────────────
     server_cert = pki_module.load_cert(server_cert_pem.encode())
-    pki_module.verify_cert(server_cert, ca_cert, expected_cn=SERVER_CN)
+    pki_module.verify_cert(server_cert, ca_cert, expected_cn=SERVER_CN, usage="server")
     server_pub  = server_cert.public_key()
 
     # ── B3: Sinh MS và mã hoá bằng khoá công khai server ────────────────────
@@ -218,10 +218,11 @@ def server_handshake(
     mssv_list       = body.get("mssv_list", [])
     client_cert_pem = body.get("client_cert", "")
     sig_bytes       = bytes.fromhex(body.get("signature", ""))
+    message         = body.get("message", "")
 
     # ── B5: Kiểm tra chứng chỉ client ────────────────────────────────────────
     client_cert = pki_module.load_cert(client_cert_pem.encode())
-    pki_module.verify_cert(client_cert, ca_cert)  # CA ký, còn hạn, không phải CA
+    pki_module.verify_cert(client_cert, ca_cert, usage="client")  # CA ký, còn hạn, không phải CA
 
     # UID trong cert phải khớp mssv_list (đúng thứ tự)
     cert_uids = pki_module.get_uids(client_cert)
@@ -265,4 +266,4 @@ def server_handshake(
         raise ValueError(f"ACK không hợp lệ: {ack_pkt.get('type')}")
 
     peer_cn = pki_module.get_cn(client_cert)
-    return Session(sock, key_aes, key_hmac, peer_cn=peer_cn, peer_cert_pem=client_cert_pem)
+    return Session(sock, key_aes, key_hmac, peer_cn=peer_cn, peer_cert_pem=client_cert_pem), message
