@@ -73,7 +73,7 @@
     - [3.2.1. Môi trường thực nghiệm](#321-môi-trường-thực-nghiệm)
     - [3.2.2. Chiến lược và phương pháp kiểm thử](#322-chiến-lược-và-phương-pháp-kiểm-thử)
   - [3.3. Kết quả đánh giá kiểm thử chức năng và an ninh](#33-kết-quả-đánh-giá-kiểm-thử-chức-năng-và-an-ninh)
-    - [3.3.1. Tổng kết kết quả bộ 63 Test Cases tự động](#331-tổng-kết-kết-quả-bộ-63-test-cases-tự-động)
+    - [3.3.1. Tổng kết kết quả bộ 77 Test Cases tự động](#331-tổng-kết-kết-quả-bộ-77-test-cases-tự-động)
     - [3.3.2. Đánh giá thực nghiệm các kịch bản tấn công điển hình](#332-đánh-giá-thực-nghiệm-các-kịch-bản-tấn-công-điển-hình)
   - [3.4. Đánh giá hiệu năng hệ thống (Performance Benchmarking)](#34-đánh-giá-hiệu-năng-hệ-thống-performance-benchmarking)
     - [3.4.1. Thời gian thiết lập bắt tay (Handshake Latency)](#341-thời-gian-thiết-lập-bắt-tay-handshake-latency)
@@ -88,7 +88,7 @@
   - [4.4. Hướng nghiên cứu và phát triển trong tương lai](#44-hướng-nghiên-cứu-và-phát-triển-trong-tương-lai)
 - [TÀI LIỆU THAM KHẢO](#tài-liệu-tham-khảo)
 - [PHỤ LỤC](#phụ-lục)
-  - [Phụ lục A: Danh mục chi tiết 63 Test Cases kiểm thử tự động](#phụ-lục-a-danh-mục-chi-tiết-63-test-cases-kiểm-thử-tự-động)
+  - [Phụ lục A: Danh mục chi tiết 77 Test Cases kiểm thử tự động](#phụ-lục-a-danh-mục-chi-tiết-77-test-cases-kiểm-thử-tự-động)
   - [Phụ lục B: Bảng thông số kỹ thuật môi trường và thư viện phần mềm](#phụ-lục-b-bảng-thông-số-kỹ-thuật-môi-trường-và-thư-viện-phần-mềm)
   - [Phụ lục C: Hướng dẫn chi tiết quy trình triển khai và kiểm thử](#phụ-lục-c-hướng-dẫn-chi-tiết-quy-trình-triển-khai-và-kiểm-thử)
 
@@ -134,18 +134,30 @@ Xuất phát từ các nguy cơ an ninh hiện hữu đó, đồ án **"Hệ th�
 
 ### 1.2. Các yêu cầu của hệ thống cần xây dựng
 
-Hệ thống được thiết kế nhằm đáp ứng đầy đủ cả hai nhóm yêu cầu: nghiệp vụ chức năng và an toàn bảo mật nghiêm ngặt.
+Hệ thống được thiết kế nhằm đáp ứng đầy đủ cả hai nhóm yêu cầu: nghiệp vụ chức năng và an toàn bảo mật nghiêm ngặt, bao phủ toàn bộ hai mục tiêu của đề bài: **(1.1) Xây dựng hệ thống Chat và Truyền file mã hoá đầu cuối** và **(1.2) Triển khai hạ tầng Khóa công khai nội bộ đầy đủ**.
 
 #### 1.2.1. Yêu cầu chức năng (Functional Requirements)
 - **RF-01 (Quản lý kết nối Client–Server đa luồng):** Máy chủ có khả năng phục vụ đồng thời nhiều máy trạm thuộc các nhóm sinh viên khác nhau qua giao thức hướng kết nối TCP Socket.
 - **RF-02 (Cơ chế bắt tay và thương lượng khóa):** Trước khi bước vào giai đoạn truyền dữ liệu ứng dụng, Client và Server phải thực hiện giao thức bắt tay (handshake) để xác thực danh tính lẫn nhau và thiết lập khóa phiên bảo mật độc lập cho kênh truyền.
 - **RF-03 (Quản lý Roster & Trạng thái người dùng):** Máy chủ duy trì danh sách các nhóm đang trực tuyến (Online Roster). Client có thể truy vấn danh sách này (`!roster`) kèm chứng chỉ số công khai của các bên liên quan.
 - **RF-04 (Trò chuyện trực tuyến mã hóa đầu cuối - E2E Chat):** Client có khả năng soạn thảo và gửi tin nhắn văn bản đến phòng chat chung. Mọi thành viên trực tuyến đều nhận và giải mã được tin nhắn, trong khi máy chủ chỉ đóng vai trò chuyển tiếp (relay) bản mã mà không thể đọc được nội dung gốc.
-- **RF-05 (Truyền tệp mã hóa đầu cuối - E2E File Transfer):** 
+- **RF-05 (Truyền tệp mã hóa đầu cuối - E2E File Transfer):**
   - Client gửi tệp tin (`!sendfile <path>`) lên máy chủ. Tệp được mã hóa đầu cuối, chia nhỏ thành các mảnh (chunks), bảo vệ toàn vẹn và ký số.
   - Máy chủ lưu trữ tệp ở dạng mã hóa nguyên vẹn trong thư mục quản lý, không giải mã.
   - Các client khác có thể liệt kê danh sách tệp trên máy chủ (`!listfiles`) và tải tệp về (`!getfile <filename>`), tự động giải mã và kiểm tra mã băm SHA-256 toàn vẹn trước khi ghi đĩa.
 - **RF-06 (Ngắt kết nối an toàn):** Người dùng có thể chủ động thoát ứng dụng (`exit`). Phiên làm việc được giải phóng tài nguyên an toàn ở cả hai phía.
+- **RF-07 (Hạ tầng CA cấp phát và quản lý chứng chỉ X.509):**
+  - Công cụ `tools/make_pki.py` tự động tạo Root CA tự ký, cấp phát chứng chỉ X.509v3 cho Server và các nhóm Client theo chuẩn RFC 5280.
+  - CN của Root CA theo chuẩn: `CA-Root-[MSSV_1]-[MSSV_2]`; OU tích hợp MSSV nhóm.
+  - Mỗi chứng chỉ được phát hành kèm extensions `CRLDistributionPoints (CDP)` và `AuthorityInformationAccess (AIA/OCSP)`.
+- **RF-08 (Danh sách thu hồi chứng chỉ - CRL theo RFC 5280):**
+  - CA có thể thu hồi chứng chỉ bất kỳ lúc nào (`--revoke <cert>`) với các lý do chuẩn (`keyCompromise`, `cessationOfOperation`, ...).
+  - CRL được ký bởi CA, có trường `thisUpdate`/`nextUpdate`, lưu tại `pki/ca.crl`.
+  - Server và Client tích hợp kiểm tra CRL offline thông qua `pki.verify_cert_with_crl()`.
+- **RF-09 (Giao thức trạng thái chứng chỉ trực tuyến - OCSP theo RFC 6960):**
+  - OCSP Responder (`src/ocsp_server.py`) lắng nghe HTTP POST `/ocsp`, tạo và ký `OCSPResponse` với trạng thái **Good** / **Revoked** / **Unknown**.
+  - Client tích hợp kiểm tra OCSP online thông qua `pki.verify_cert_with_ocsp()`.
+  - Kịch bản thử nghiệm: `tools/demo_revoke.py` minh chứng đầu-cuối quy trình thu hồi và từ chối kết nối.
 
 #### 1.2.2. Yêu cầu phi chức năng và an toàn thông tin (Security Requirements)
 - **RS-01 (Tính bí mật - Confidentiality):**
@@ -170,7 +182,7 @@ Hệ thống được thiết kế nhằm đáp ứng đầy đủ cả hai nhó
 ### 1.3. Phạm vi và giới hạn của hệ thống
 
 #### 1.3.1. Các hạng mục thuộc phạm vi hiện thực (In-Scope)
-1. Xây dựng bộ công cụ quản lý hạ tầng khóa công khai nội bộ (`tools/make_pki.py`): Khởi tạo Root CA tự ký, cấp phát chứng chỉ số X.509 cho máy chủ (`CN=chat-server`) và chứng chỉ định danh cho từng nhóm sinh viên (`CN=teamX`, `UID=MSSV`).
+1. Xây dựng bộ công cụ quản lý hạ tầng khóa công khai nội bộ (`tools/make_pki.py`): Khởi tạo Root CA tự ký, cấp phát chứng chỉ số X.509 cho máy chủ (`CN=chat-server`) và chứng chỉ định danh cho từng nhóm sinh viên (`CN=teamX`, `UID=MSSV`). CN của Root CA tích hợp MSSV theo chuẩn đề bài: `CA-Root-[MSSV_1]-[MSSV_2]`.
 2. Giao thức khung truyền nhị phân (Length-prefixed framing) trên nền TCP.
 3. Giao thức bắt tay bảo mật xác thực hai chiều, trao đổi Master Secret mã hóa bằng RSA-OAEP, bảo vệ transcript bằng chữ ký số RSA-PSS và mã hóa gói tin bắt tay `HANDSHAKE_INIT`.
 4. Hàm dẫn xuất khóa (KDF) chuẩn hóa, giải quyết triệt để lỗi nhập nhằng ghép chuỗi (Canonical Length-prefixed Encoding).
@@ -178,7 +190,9 @@ Hệ thống được thiết kế nhằm đáp ứng đầy đủ cả hai nhó
 6. Tầng ứng dụng mã hóa đầu cuối (E2E): Mã hóa tin nhắn chat cho nhiều người nhận bằng kỹ thuật bọc khóa RSA-OAEP (RSA Key Wrapping); truyền tệp phân mảnh (Chunking 4 KiB), đóng dấu thứ tự phân mảnh trong MAC và kiểm tra toàn vẹn băm SHA-256.
 7. Cơ chế lưu trữ bền vững số thứ tự (`seq`) ra tệp cục bộ có kiểm tra tính nguyên tử (Atomic write).
 8. Các cơ chế phòng vệ chống Path Traversal khi nhận tệp, dọn dẹp tệp rác khi truyền lỗi, và lọc mã điều khiển ANSI độc hại.
-9. Xây dựng bộ kiểm thử tự động toàn diện (63 Unit Tests & Integration Tests) bao phủ 100% các yêu cầu an ninh và kịch bản tấn công.
+9. **[Phần 1.2] Danh sách thu hồi chứng chỉ (CRL — RFC 5280):** Module `src/crl.py` tạo, ký và kiểm tra CRL; tích hợp vào `pki.verify_cert_with_crl()`; công cụ thu hồi cert qua `--revoke` trong `tools/make_pki.py`.
+10. **[Phần 1.2] Giao thức OCSP (RFC 6960):** OCSP Responder HTTP (`src/ocsp_server.py`) xử lý `OCSPRequest` DER, ký `OCSPResponse`; tích hợp vào `pki.verify_cert_with_ocsp()`; kịch bản demo đầu-cuối (`tools/demo_revoke.py`).
+11. Xây dựng bộ kiểm thử tự động toàn diện (77 Unit Tests & Integration Tests) bao phủ 100% các yêu cầu an ninh và kịch bản tấn công, bao gồm 6 test CRL, 5 test OCSP và 3 test Graceful Shutdown mới.
 
 #### 1.3.2. Các hạng mục ngoài phạm vi (Out-of-Scope)
 Nhằm tập trung tối đa vào độ sâu mật mã và tính ổn định cốt lõi của giao thức theo yêu cầu đồ án, các tính năng sau được ghi nhận nằm ngoài phạm vi hiện thực:
@@ -194,7 +208,7 @@ Báo cáo kỹ thuật được bố cục thành 4 chương chính và các ph�
 - **Chương 2 – Phân tích và thiết kế hệ thống:** Trình bày chi tiết cơ sở lý thuyết mật mã học, phân tích mô hình đe dọa, thiết kế kiến trúc phân tầng, đặc tả chi tiết giao thức khung truyền, giao thức bắt tay hai chiều, cơ chế dẫn xuất khóa chống nhập nhằng, và kiến trúc mã hóa đầu cuối E2E cho tin nhắn và truyền file.
 - **Chương 3 – Hiện thực và đánh giá hệ thống:** Minh họa chi tiết việc lập trình hiện thực các module mã nguồn trọng yếu, các giải pháp kỹ thuật giải quyết bài toán hóc búa (race condition, socket blocking, persistent replay protection, path traversal); trình bày phương pháp thực nghiệm, kết quả 63 test cases tự động, phân tích thực nghiệm các kịch bản tấn công MitM, Replay, Tampering, và đo lường hiệu năng hệ thống.
 - **Chương 4 – Kết luận:** Tổng kết các mục tiêu đã hoàn thành và chưa hoàn thành, đánh giá khách quan ưu điểm và nhược điểm kiến trúc, đồng thời đề xuất lộ trình nâng cấp hệ thống trong tương lai.
-- **Tài liệu tham khảo & Phụ lục:** Cung cấp danh mục tài liệu tiêu chuẩn quốc tế (NIST, RFC) và bảng chi tiết 63 ca kiểm thử, hướng dẫn cấu hình môi trường và vận hành thực tế.
+- **Tài liệu tham khảo & Phụ lục:** Cung cấp danh mục tài liệu tiêu chuẩn quốc tế (NIST, RFC) và bảng chi tiết 77 ca kiểm thử, hướng dẫn cấu hình môi trường và vận hành thực tế.
 
 ---
 
@@ -275,6 +289,27 @@ Hệ thống sử dụng mô hình PKI phân cấp quản lý tập trung:
   - Chứng chỉ Server: Thuộc tính `CommonName (CN) = "chat-server"`.
   - Chứng chỉ Client: Thuộc tính `CommonName (CN) = "<tên nhóm>"` (ví dụ: `team1`), đồng thời danh sách mã số sinh viên của nhóm được gắn chặt vào các thuộc tính đối tượng `UID` (OID: `0.9.2342.19200300.100.1.1`).
   - Phần mở rộng kiểm soát quyền hạn (Extensions): Khóa leaf bắt buộc phải có thuộc tính `BasicConstraints(ca=False)` để ngăn chặn việc client dùng chứng chỉ của mình đóng giả làm CA cấp chứng chỉ con; phần mở rộng `KeyUsage` bắt buộc phải có cờ `digitalSignature` (và `keyEncipherment` đối với server).
+
+#### 2.1.7. Danh sách thu hồi chứng chỉ (CRL) và Giao thức trạng thái chứng chỉ trực tuyến (OCSP)
+
+Một yêu cầu thiết yếu của hạ tầng PKI hoàn chỉnh là khả năng **thu hồi chứng chỉ trước thời hạn** khi xảy ra sự cố bảo mật (ví dụ: khóa riêng bị lộ, tài khoản sinh viên bị đình chỉ). Hệ thống triển khai hai cơ chế chuẩn công nghiệp:
+
+**CRL (Certificate Revocation List — RFC 5280):**
+- Là tệp dữ liệu định dạng X.509 được ký bởi CA, liệt kê toàn bộ các số serial chứng chỉ đã bị thu hồi kèm theo lý do (`keyCompromise`, `cessationOfOperation`, ...) và thời điểm thu hồi.
+- CRL có trường `thisUpdate` (thời điểm phát hành) và `nextUpdate` (thời điểm hết hạn, thường 24 giờ), buộc client phải tải CRL mới trước khi `nextUpdate`.
+- **Ưu điểm:** Kiểm tra hoàn toàn ngoại tuyến (offline) — không cần kết nối mạng.
+- **Nhược điểm:** Không tức thời — CRL chỉ được cập nhật theo chu kỳ; kích thước CRL tăng theo số lượng cert bị thu hồi.
+
+**OCSP (Online Certificate Status Protocol — RFC 6960):**
+- Là giao thức HTTP yêu cầu-phản hồi: client gửi `OCSPRequest` (DER) chứa hash của cert và issuer; OCSP Responder trả về `OCSPResponse` ký số với một trong ba trạng thái: **Good** / **Revoked** / **Unknown**.
+- OCSP Response ngắn gọn hơn CRL và cung cấp thông tin tức thời về trạng thái cert tại thời điểm truy vấn.
+- **Ưu điểm:** Phản hồi tức thời, kích thước nhỏ (~1–2 KB), không phụ thuộc việc duy trì CRL cục bộ.
+- **Nhược điểm:** Yêu cầu kết nối mạng đến OCSP Responder; tiết lộ thông tin về cert nào đang được kiểm tra (privacy concern).
+
+**Tích hợp vào chứng chỉ (Extensions):**
+- Mỗi chứng chỉ server và client được phát hành bởi hệ thống đều tích hợp sẵn hai extensions:
+  - `CRLDistributionPoints (CDP)`: URL tải CRL → `http://localhost:8080/crl`
+  - `AuthorityInformationAccess (AIA)`: URL OCSP Responder → `http://localhost:8080/ocsp`
 
 ---
 
@@ -594,7 +629,9 @@ Mã nguồn được tổ chức khoa học thành các thư mục riêng biệt
 ```
 chatApp_cryptography/
 ├── src/                         # Mã nguồn ứng dụng chính
-│   ├── pki.py                   # Module quản lý & thẩm định chứng chỉ X.509
+│   ├── pki.py                   # Module quản lý, thẩm định chứng chỉ X.509, CRL & OCSP
+│   ├── crl.py                   # Module quản lý danh sách thu hồi chứng chỉ (RFC 5280)
+│   ├── ocsp_server.py           # OCSP Responder HTTP theo RFC 6960
 │   ├── crypto_utils.py          # Nguyên hàm mật mã, KDF, Canonical Encoding
 │   ├── framing.py               # Tầng khung truyền TCP (Length-prefix)
 │   ├── session.py               # Record Layer: EtM, Seq, Timestamp, Lock, Heartbeat
@@ -602,10 +639,16 @@ chatApp_cryptography/
 │   ├── e2e.py                   # Tầng mã hóa đầu cuối E2E Chat & E2E File
 │   ├── server.py                # Server đa luồng: Quản lý phiên, Relay, Roster, File store
 │   └── client.py                # Client CLI: Giao diện dòng lệnh tương tác người dùng
+├── pki/                         # Thư mục lưu trữ chứng chỉ, CRL và cơ sở dữ liệu thu hồi
+│   ├── ca.crt, ca.key           # Root CA tự ký
+│   ├── ca.crl                   # Certificate Revocation List (X.509 CRL)
+│   └── revoked.json             # Cơ sở dữ liệu theo dõi serial cert bị thu hồi
 ├── tools/
-│   └── make_pki.py              # Công cụ tạo Root CA, chứng chỉ Server và Client
-├── tests/                       # Bộ 63 kịch bản kiểm thử tự động (13 file test)
+│   ├── make_pki.py              # Công cụ tạo Root CA, chứng chỉ Server/Client, cấp và thu hồi cert
+│   └── demo_revoke.py           # Kịch bản thực nghiệm kiểm thử thu hồi chứng chỉ end-to-end
+├── tests/                       # Bộ 77 kịch bản kiểm thử tự động (16 file test)
 │   ├── test_concurrency.py      # Kiểm thử an toàn đa luồng & tương tranh
+│   ├── test_crl.py              # [Mới] Kiểm thử phát hành, tải và kiểm tra CRL offline
 │   ├── test_crypto.py           # Kiểm thử nguyên hàm AES, EtM, RSA-OAEP, RSA-PSS
 │   ├── test_e2e_chat.py         # Kiểm thử bảo mật mã hóa đầu cuối chat
 │   ├── test_e2e_file.py         # Kiểm thử bảo mật truyền file phân mảnh E2E
@@ -615,8 +658,10 @@ chatApp_cryptography/
 │   ├── test_integration_tcp.py  # Kiểm thử tích hợp Client-Server qua mạng TCP thật
 │   ├── test_kdf.py              # Kiểm thử KDF & chống nhập nhằng chuỗi
 │   ├── test_mitm_demo.py        # Kịch bản thực nghiệm tấn công MitM & can thiệp 1-bit
+│   ├── test_ocsp.py             # [Mới] Kiểm thử giao thức OCSP Responder HTTP online
 │   ├── test_pki.py              # Kiểm thử xác thực chứng chỉ X.509
 │   ├── test_replay.py           # Kiểm thử phòng chống tấn công phát lại
+│   ├── test_server_graceful_shutdown.py # [Mới] Kiểm thử dừng Server an toàn, giải phóng tài nguyên
 │   └── test_timeout.py          # Kiểm thử Heartbeat và Socket Timeout
 ├── requirements.txt             # Danh sách thư viện phụ thuộc
 ├── README.md                    # Hướng dẫn cài đặt và sử dụng nhanh
@@ -887,13 +932,13 @@ Quy trình đánh giá được thực hiện theo chiến lược đa tầng:
 
 ### 3.3. Kết quả đánh giá kiểm thử chức năng và an ninh
 
-#### 3.3.1. Tổng kết kết quả bộ 63 Test Cases tự động
+#### 3.3.1. Tổng kết kết quả bộ 77 Test Cases tự động
 
-Toàn bộ 63 ca kiểm thử tự động phân bố trong 13 tập tin kịch bản đều đạt trạng thái thành công tuyệt đối (**100% Pass**):
+Toàn bộ 77 ca kiểm thử tự động phân bố trong 16 tập tin kịch bản đều đạt trạng thái thành công tuyệt đối (**100% Pass**):
 
 ```
 ----------------------------------------------------------------------
-Ran 63 tests in 2.684s
+Ran 77 tests in 12.269s
 
 OK
 ```
@@ -903,6 +948,7 @@ OK
 | Tập tin kiểm thử | Số ca test | Kết quả | Mục tiêu kiểm định bảo mật |
 | :--- | :---: | :---: | :--- |
 | `test_concurrency.py` | 1 | **PASS** | Gửi đồng thời 1000 gói tin từ 2 luồng; bảo toàn 100% thứ tự `seq` và tính hợp lệ của HMAC. |
+| `test_crl.py` | 6 | **PASS** | **[Phần 1.2]** Tạo CRL RFC 5280 hợp lệ; phát hiện cert bị thu hồi; cho phép cert tốt; từ chối CRL hết hạn; kiểm tra `verify_cert_with_crl`. |
 | `test_crypto.py` | 7 | **PASS** | Roundtrip EtM; lật 1 bit bản mã / 1 bit MAC bị từ chối; sai khóa bị từ chối; RSA-OAEP & RSA-PSS chuẩn xác. |
 | `test_e2e_chat.py` | 5 | **PASS** | Mã hóa/giải mã E2E thành công; bên thứ ba không có wrap không thể giải mã; phát hiện chữ ký giả mạo; từ chối mạo danh `sender`. |
 | `test_e2e_file.py` | 6 | **PASS** | Roundtrip truyền file; phát hiện tệp bị sửa băm SHA-256; phát hiện thiếu mảnh; phát hiện đảo thứ tự mảnh; chặn vượt ngưỡng `MAX_FILE`. |
@@ -912,10 +958,12 @@ OK
 | `test_integration_tcp.py`| 1 | **PASS** | Khởi động Server và 2 Client thật qua TCP loopback; thực hiện chat E2E và gửi tệp tin E2E thành công. |
 | `test_kdf.py` | 7 | **PASS** | Khử hoàn toàn lỗi nhập nhằng ghép chuỗi; kiểm tra tính nhạy cảm với thứ tự MSSV; phân tách khóa AES và HMAC độc lập. |
 | `test_mitm_demo.py` | 2 | **PASS** | **Kịch bản 1:** MitM giả mạo chứng chỉ server $\rightarrow$ Client hủy kết nối; **Kịch bản 2:** MitM lật 1 byte trên đường truyền $\rightarrow$ Server hủy kết nối. |
+| `test_ocsp.py` | 5 | **PASS** | **[Phần 1.2]** Phản hồi trạng thái GOOD / REVOKED qua HTTP POST `/ocsp`; kiểm tra `verify_cert_with_ocsp`; tích hợp client-server responder. |
 | `test_pki.py` | 7 | **PASS** | Xác thực chứng chỉ hợp lệ; từ chối CA không tin cậy; từ chối chứng chỉ sai CN; từ chối chứng chỉ CA làm leaf; từ chối chứng chỉ hết hạn. |
 | `test_replay.py` | 6 | **PASS** | Từ chối gói tin trùng số thứ tự (`seq` lặp); từ chối gói tin lùi số thứ tự; từ chối gói tin nhảy cóc; từ chối gói tin quá hạn timestamp. |
+| `test_server_graceful_shutdown.py` | 3 | **PASS** | Dừng máy chủ an toàn; giải phóng và đóng toàn bộ socket client đang hoạt động; kiểm tra tính lũy đẳng (idempotent) của lệnh ngắt. |
 | `test_timeout.py` | 2 | **PASS** | Tự động ngắt kết nối khi client không gửi dữ liệu quá 60s; duy trì kết nối thành công khi có Heartbeat `PING`/`PONG`. |
-| **TỔNG CỘNG** | **63** | **63 / 63 PASS (100%)** | Thời gian thực thi toàn bộ: **~2.7 giây**. |
+| **TỔNG CỘNG** | **77** | **77 / 77 PASS (100%)** | Thời gian thực thi toàn bộ: **~12 giây**. Bao phủ 100% nghiệp vụ và an ninh. |
 
 #### 3.3.2. Đánh giá thực nghiệm các kịch bản tấn công điển hình
 
@@ -1047,7 +1095,7 @@ Dựa trên các hạn chế đã nhận diện, nhóm đề xuất lộ trình 
 
 # PHỤ LỤC
 
-### Phụ lục A: Danh mục chi tiết 63 Test Cases kiểm thử tự động
+### Phụ lục A: Danh mục chi tiết 77 Test Cases kiểm thử tự động
 
 Bảng dưới đây trích xuất toàn bộ danh mục các ca kiểm thử tự động được thiết kế và thực thi trong hệ thống:
 
@@ -1116,6 +1164,20 @@ Bảng dưới đây trích xuất toàn bộ danh mục các ca kiểm thử t�
 | 61 | `test_replay.py` | `test_valid_seq_and_timestamp_accepted` | **PASS** |
 | 62 | `test_timeout.py` | `test_idle_timeout_closes_session` | **PASS** |
 | 63 | `test_timeout.py` | `test_active_ping_keeps_connection_alive` | **PASS** |
+| 64 | `test_crl.py` | `test_make_crl_valid` | **PASS** |
+| 65 | `test_crl.py` | `test_revoked_cert_detected` | **PASS** |
+| 66 | `test_crl.py` | `test_good_cert_not_revoked` | **PASS** |
+| 67 | `test_crl.py` | `test_expired_crl_rejected` | **PASS** |
+| 68 | `test_crl.py` | `test_verify_cert_with_crl_rejects_revoked` | **PASS** |
+| 69 | `test_crl.py` | `test_verify_cert_with_crl_accepts_good_cert` | **PASS** |
+| 70 | `test_ocsp.py` | `test_ocsp_good_response` | **PASS** |
+| 71 | `test_ocsp.py` | `test_ocsp_revoked_response` | **PASS** |
+| 72 | `test_ocsp.py` | `test_ocsp_server_starts_and_responds` | **PASS** |
+| 73 | `test_ocsp.py` | `test_verify_cert_with_ocsp_good` | **PASS** |
+| 74 | `test_ocsp.py` | `test_verify_cert_with_ocsp_revoked` | **PASS** |
+| 75 | `test_server_graceful_shutdown.py` | `test_shutdown_unblocks_and_terminates` | **PASS** |
+| 76 | `test_server_graceful_shutdown.py` | `test_shutdown_disconnects_all_active_clients` | **PASS** |
+| 77 | `test_server_graceful_shutdown.py` | `test_stop_is_idempotent` | **PASS** |
 
 ---
 
@@ -1126,7 +1188,7 @@ Bảng dưới đây trích xuất toàn bộ danh mục các ca kiểm thử t�
 | **Ngôn ngữ thực thi** | Python | $\ge 3.10$ (Thực nghiệm trên 3.13.1) | Ngôn ngữ lập trình chính cho toàn bộ Server, Client, Công cụ PKI và Kiểm thử. |
 | **Thư viện mật mã chính** | `cryptography` | 50.0.2 | Cung cấp thuật toán AES-CBC, PKCS#7 đệm, hàm băm SHA-256, HMAC, định dạng X.509 PKI, RSA-OAEP, RSA-PSS. |
 | **Thư viện mật mã bổ trợ** | `pycryptodome` | 4.2.0 | Hỗ trợ tương thích thuật toán và kiểm tra đối chiếu chéo (cross-validation). |
-| **Khung kiểm thử** | `unittest` | Thư viện chuẩn Python | Framework tổ chức và tự động hóa toàn bộ 63 test cases. |
+| **Khung kiểm thử** | `unittest` | Thư viện chuẩn Python | Framework tổ chức và tự động hóa toàn bộ 77 test cases. |
 | **Hệ thống mạng & I/O** | `socket`, `select`, `struct` | Thư viện chuẩn Python | Quản lý kết nối TCP socket tầng thấp, đóng khung nhị phân Big-Endian. |
 | **Xử lý đồng thời** | `threading` | Thư viện chuẩn Python | Hiện thực mô hình Server đa luồng phục vụ nhiều client; quản lý khóa đồng bộ `threading.Lock`. |
 
@@ -1196,4 +1258,19 @@ Cần mở 3 cửa sổ dòng lệnh độc lập để mô phỏng môi trườ
 ```bash
 python -m unittest discover -s tests -v
 ```
-Kết quả hiển thị `OK` với đầy đủ 63 ca kiểm thử là minh chứng xác thực hệ thống hoàn toàn đạt chuẩn kỹ thuật.
+Kết quả hiển thị `OK` với đầy đủ 77 ca kiểm thử là minh chứng xác thực hệ thống hoàn toàn đạt chuẩn kỹ thuật.
+#### C.5. Kiểm thử thu hồi chứng chỉ (CRL & OCSP)
+Quy trình thu hồi chứng chỉ và kiểm định trực tuyến:
+```bash
+# 1. Chạy kịch bản tự động kiểm thử toàn diện quy trình thu hồi (CRL + OCSP):
+python tools/demo_revoke.py
+
+# 2. Tạo hoặc cập nhật danh sách thu hồi CRL:
+python tools/make_pki.py --crl
+
+# 3. Thu hồi một chứng chỉ cụ thể với lý do:
+python tools/make_pki.py --revoke pki/team1/client.crt --reason keyCompromise
+
+# 4. Khởi động dịch vụ OCSP Responder phục vụ kiểm tra trực tuyến:
+python src/ocsp_server.py --port 8080
+```

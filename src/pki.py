@@ -175,3 +175,104 @@ def verify_cert(
             raise ValueError("Chứng chỉ máy chủ thiếu quyền key_encipherment.")
         if usage == "client" and not ku.digital_signature:
             raise ValueError("Chứng chỉ máy khách thiếu quyền digital_signature.")
+
+
+# ─── Kiểm tra thu hồi (CRL / OCSP) ───────────────────────────────────────────
+
+def verify_cert_with_crl(
+    cert: x509.Certificate,
+    ca_cert: x509.Certificate,
+    crl,                         # x509.CertificateRevocationList
+    expected_cn: str | None = None,
+    usage: str | None = None,
+) -> None:
+    """
+    Kiểm tra chứng chỉ đầy đủ, bao gồm kiểm tra CRL offline.
+
+    Ném ValueError nếu:
+      - Chứng chỉ không hợp lệ (theo verify_cert).
+      - Chứng chỉ nằm trong CRL (đã bị thu hồi).
+      - CRL hết hạn (nextUpdate đã qua).
+    """
+    # 1. Kiểm tra cơ bản trước
+    verify_cert(cert, ca_cert, expected_cn=expected_cn, usage=usage)
+
+    # 2. Kiểm tra thời hạn CRL
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        next_update = crl.next_update_utc
+    except AttributeError:
+        nu = crl.next_update
+        next_update = nu.replace(tzinfo=datetime.timezone.utc) if nu.tzinfo is None else nu
+    if next_update < now:
+        raise ValueError(
+            f"CRL đã hết hạn (nextUpdate={next_update.isoformat()}). Hãy cập nhật CRL."
+        )
+
+    # 3. Kiểm tra serial trong CRL
+    revoked = crl.get_revoked_certificate_by_serial_number(cert.serial_number)
+    if revoked is not None:
+        serial_hex = hex(cert.serial_number)
+        cn = get_cn(cert)
+        raise ValueError(
+            f"Chứng chỉ đã bị thu hồi: CN='{cn}', Serial={serial_hex}"
+        )
+
+
+def verify_cert_with_ocsp(
+    cert: x509.Certificate,
+    ca_cert: x509.Certificate,
+    ocsp_url: str,
+    expected_cn: str | None = None,
+    usage: str | None = None,
+) -> None:
+    """
+    Kiểm tra chứng chỉ đầy đủ, bao gồm kiểm tra OCSP online.
+
+    Ném ValueError nếu:
+      - Chứng chỉ không hợp lệ (theo verify_cert).
+      - OCSP trả về trạng thái REVOKED.
+      - Không kết nối được OCSP server (timeout/lỗi mạng).
+    """
+    import urllib.request
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.x509 import ocsp
+
+    # 1. Kiểm tra cơ bản trước
+    verify_cert(cert, ca_cert, expected_cn=expected_cn, usage=usage)
+
+    # 2. Tạo OCSP Request
+    builder = ocsp.OCSPRequestBuilder().add_certificate(cert, ca_cert, hashes.SHA256())
+    ocsp_req = builder.build()
+    req_der  = ocsp_req.public_bytes(serialization.Encoding.DER)
+
+    # 3. Gửi HTTP POST đến OCSP server
+    try:
+        req = urllib.request.Request(
+            url=ocsp_url.rstrip("/") + "/ocsp",
+            data=req_der,
+            headers={"Content-Type": "application/ocsp-request"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp_der = resp.read()
+    except Exception as exc:
+        raise ValueError(f"Không kết nối được OCSP server tại {ocsp_url}: {exc}") from exc
+
+    # 4. Parse OCSP Response
+    ocsp_resp = ocsp.load_der_ocsp_response(resp_der)
+    if ocsp_resp.response_status != ocsp.OCSPResponseStatus.SUCCESSFUL:
+        raise ValueError(f"OCSP server trả về lỗi: {ocsp_resp.response_status}")
+
+    cert_status = ocsp_resp.certificate_status
+    if cert_status == ocsp.OCSPCertStatus.REVOKED:
+        cn = get_cn(cert)
+        serial_hex = hex(cert.serial_number)
+        raise ValueError(
+            f"OCSP: Chứng chỉ đã bị thu hồi: CN='{cn}', Serial={serial_hex}"
+        )
+    elif cert_status == ocsp.OCSPCertStatus.UNKNOWN:
+        raise ValueError(
+            f"OCSP: Chứng chỉ không được CA này nhận biết (UNKNOWN)."
+        )
+    # GOOD → OK
