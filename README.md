@@ -30,7 +30,7 @@ Hệ thống được thiết kế và hiện thực nhằm đáp ứng trọn v
 | Yêu cầu đề bài | Quy cách quy định | Hiện thực thực tế trong hệ thống |
 | :--- | :--- | :--- |
 | **Dữ liệu kiểm thử Plaintext** | Chuỗi bắt đầu: `Hello, We are [MSSV_1], [MSSV_2], ..` | Trong `src/handshake.py`, body của gói `HANDSHAKE_INIT` bắt buộc chứa trường `message = "Hello, We are 2412716, 2412760"`. |
-| **Khóa khởi tạo bí mật (KDF)** | Băm từ MSSV: `Key = SHA256(MSSV_1 \|\| MSSV_2 ..)` | Trong `src/crypto_utils.py`, `kdf_session_key()` tính `SHA256(MS \|\| enc_list(mssv_list) \|\| enc(nonce_bytes))` kết hợp mã hóa canonical chống nhập nhằng chuỗi. |
+| **Khóa khởi tạo bí mật (KDF)** | Băm từ MSSV: `Key = SHA256(MSSV_1 \|\| MSSV_2 ..)` | **Đạt (Mở rộng an toàn có chủ đích)**: Đề bài yêu cầu `Key = SHA256(MSSV_1 \|\| MSSV_2 ..)`. Để tăng cường an ninh, hệ thống cài đặt `SHA256(MS \|\| enc_list(mssv_list) \|\| enc(nonce_bytes))` trong `src/crypto_utils.py`: gắn kết Master Secret và Nonce ngẫu nhiên giúp khóa phiên biến thiên từng phiên (chống Replay và rò rỉ khóa tĩnh nếu lộ MSSV), đồng thời mã hóa canonical `enc_list` bảo lưu thành phần MSSV của nhóm và chống nhập nhằng chuỗi. |
 | **Thông tin CA Subject (CN)** | `CA-Root-[MSSV_1]-[MSSV_2] ..` | Root CA được cấp thuộc tính: `CN = CA-Root-2412716-2412760`. |
 | **Thông tin CA Subject (OU)** | `Faculty of Computer Science and Engineer – [MSSV_1]-[MSSV_2] ..` | Root CA được cấp thuộc tính: `OU = Faculty of Computer Science and Engineer – 2412716-2412760`. |
 
@@ -61,10 +61,14 @@ chatApp_cryptography/
 │   └── team*/                         # Thư mục chứng chỉ số của từng nhóm Client (CN=<team>, UID=MSSV)
 ├── tools/                             # Công cụ quản trị PKI và thực nghiệm
 │   ├── make_pki.py                    # Script tự động tạo Root CA, cấp phát cert, tạo CRL và thu hồi cert
-│   └── demo_revoke.py                 # Kịch bản thực nghiệm đầu-cuối quy trình thu hồi chứng chỉ (CRL/OCSP)
-├── tests/                             # Bộ kiểm thử tự động toàn diện (77 Test Cases trong 16 tập tin)
+│   ├── demo_revoke.py                 # Kịch bản thực nghiệm đầu-cuối quy trình thu hồi chứng chỉ (CRL/OCSP)
+│   └── demo_webserver.py              # Web Server HTTPS demo phục vụ xác thực chứng chỉ số (Mục tiêu 1.2)
+├── web/                               # Giao diện Web tĩnh phục vụ Demo Web Server HTTPS
+│   ├── index.html                     # Bảng điều khiển hiển thị thông tin PKI & trạng thái bảo mật
+│   └── style.css                      # Định kiểu CSS hiện đại
+├── tests/                             # Bộ kiểm thử tự động toàn diện (75 Test Cases trong 15 tập tin)
 │   ├── test_concurrency.py            # Kiểm thử an toàn đa luồng & tương tranh
-│   ├── test_crl.py                    # [Mới] Kiểm thử phát hành và xác thực CRL offline
+│   ├── test_crl.py                    # [Mục tiêu 1.2] Kiểm thử phát hành và xác thực CRL offline
 │   ├── test_crypto.py                 # Kiểm thử nguyên hàm mật mã EtM, RSA-OAEP, RSA-PSS
 │   ├── test_e2e_chat.py               # Kiểm thử bảo mật mã hóa đầu cuối tin nhắn
 │   ├── test_e2e_file.py               # Kiểm thử bảo mật truyền tệp phân mảnh E2E
@@ -74,10 +78,9 @@ chatApp_cryptography/
 │   ├── test_integration_tcp.py        # Kiểm thử tích hợp Client-Server qua mạng TCP thật
 │   ├── test_kdf.py                    # Kiểm thử KDF & tính nhạy cảm thứ tự MSSV
 │   ├── test_mitm_demo.py              # Kiểm thử tấn công MitM & can thiệp 1-bit trên đường truyền
-│   ├── test_ocsp.py                   # [Mới] Kiểm thử dịch vụ OCSP Responder HTTP online
+│   ├── test_ocsp.py                   # [Mục tiêu 1.2] Kiểm thử dịch vụ OCSP Responder HTTP online
 │   ├── test_pki.py                    # Kiểm thử xác thực chứng chỉ số X.509
 │   ├── test_replay.py                 # Kiểm thử phòng chống tấn công phát lại (Replay)
-│   ├── test_server_graceful_shutdown.py # [Mới] Kiểm thử tắt máy chủ an toàn
 │   └── test_timeout.py                # Kiểm thử Heartbeat và Socket Timeout
 ├── refs/                              # Tài liệu tham khảo và mã nguồn mở sử dụng
 │   └── README.md                      # Chi tiết các tiêu chuẩn RFC, NIST và thư viện nguồn mở
@@ -157,6 +160,30 @@ python tools/demo_revoke.py
 - Thẩm định lại bằng `verify_cert_with_crl` $\rightarrow$ **Từ chối kết nối**.
 - Khởi động OCSP Responder và truy vấn HTTP $\rightarrow$ **Từ chối với trạng thái REVOKED**.
 
+### 4.5. Chạy Demo Web Server HTTPS/TLS (Mục tiêu 1.2 Đề bài)
+Theo quy định bài tập lớn: *"Hệ thống CA hoạt động thực tế, cấp phát chứng thư cho Web Server (HTTPS/TLS) kèm kịch bản thử nghiệm xác thực."*
+
+Hệ thống cung cấp chương trình Web Server HTTPS hoàn chỉnh phục vụ trang web giao diện qua cổng bảo mật `8443`:
+
+```bash
+# 1. Khởi động Web Server HTTPS sử dụng chứng chỉ do CA cấp:
+python tools/demo_webserver.py
+```
+- Máy chủ HTTPS lắng nghe tại: `https://127.0.0.1:8443/` (hoặc `https://localhost:8443/`).
+- Sử dụng chứng chỉ đã cấp phát `pki/server.crt` (CN=`chat-server`, SAN=`localhost, 127.0.0.1`) và khóa riêng `pki/server.key`.
+- Người dùng có thể mở trình duyệt truy cập `https://127.0.0.1:8443/` để xem bảng điều khiển hiển thị trạng thái PKI.
+
+```bash
+# 2. Chạy kịch bản tự động kiểm thử xác thực chứng chỉ với Root CA:
+python tools/demo_webserver.py --test
+```
+- Kịch bản sẽ tự động khởi tạo kết nối HTTPS Client tin tưởng Root CA `pki/ca.crt`, hoàn tất bắt tay TLS, đối chiếu chuỗi chứng thư số và in xác nhận thành công (`HTTP 200`).
+
+```bash
+# 3. Hoặc kiểm tra bằng công cụ curl với cờ CA cert:
+curl --cacert pki/ca.crt https://127.0.0.1:8443/
+```
+
 ---
 
 ## 5. Hướng dẫn vận hành ứng dụng Chat & Truyền tệp
@@ -202,13 +229,13 @@ Khi kết nối thành công, Client hiển thị dấu nhắc lệnh `team1 > `
 
 ## 7. Chạy bộ kiểm thử tự động toàn diện (Test Suite)
 
-Dự án trang bị **77 Test Cases tự động** (phân bổ trong 16 tập tin kiểm thử tại thư mục `tests/`), bao phủ toàn diện 100% các tính năng nghiệp vụ và các kịch bản an ninh:
+Dự án trang bị **75 Test Cases tự động** (phân bổ trong 15 tập tin kiểm thử tại thư mục `tests/`), kiểm thử toàn diện các luồng hoạt động chính, các tình huống biên và các kịch bản phòng chống tấn công an ninh:
 
 ```bash
 python -m unittest discover tests -v
 ```
 
-### Bảng tổng kết kết quả kiểm thử (100% PASS):
+### Bảng tổng kết kết quả kiểm thử (75/75 PASS):
 
 | Tập tin kiểm thử | Số ca test | Trạng thái | Nội dung kiểm định an ninh & chức năng |
 | :--- | :---: | :---: | :--- |
@@ -220,15 +247,14 @@ python -m unittest discover tests -v
 | `test_files_server.py` | 6 | **PASS** | Chặn đứng Path Traversal; xử lý an toàn trùng tên; dọn dẹp file tạm `.part`. |
 | `test_framing.py` | 6 | **PASS** | Khung truyền TCP `[len][payload]`; xử lý vỡ/dính gói; chặn khung quá 64 KiB. |
 | `test_handshake.py` | 7 | **PASS** | Bắt tay 4 bước chuẩn; từ chối CA giả; từ chối sai MSSV; bảo vệ bí mật MSSV. |
-| `test_integration_tcp.py`| 1 | **PASS** | Kiểm thử đầu-cuối Client-Server qua mạng TCP loopback thật: chat & file E2E. |
+| `test_integration_tcp.py`| 2 | **PASS** | Kiểm thử đầu-cuối Client-Server qua TCP thật: chat & file E2E; kiểm thử khởi động CLI qua main() nạp CRL an toàn. |
 | `test_kdf.py` | 7 | **PASS** | Chống nhập nhằng chuỗi; kiểm định tính nhạy cảm với thứ tự MSSV; phân tách khóa. |
 | `test_mitm_demo.py` | 2 | **PASS** | Thực nghiệm MitM tráo cert server; MitM lật 1 byte trên đường truyền mạng. |
 | `test_ocsp.py` | 5 | **PASS** | **[Mục tiêu 1.2]** Phản hồi trạng thái GOOD / REVOKED qua HTTP POST `/ocsp`. |
 | `test_pki.py` | 7 | **PASS** | Xác thực cert hợp lệ; từ chối CA giả mạo; từ chối cert sai CN; từ chối cert quá hạn. |
 | `test_replay.py` | 6 | **PASS** | Chống phát lại: từ chối trùng `seq`, lùi `seq`, nhảy cóc `seq`, quá hạn timestamp. |
-| `test_server_graceful_shutdown.py` | 3 | **PASS** | Dừng máy chủ an toàn; giải phóng toàn bộ kết nối client đang mở. |
 | `test_timeout.py` | 2 | **PASS** | Tự động đóng phiên idle khi quá 60s; duy trì kết nối thành công với Heartbeat. |
-| **TỔNG CỘNG** | **77** | **77 / 77 PASS (100%)** | Thời gian chạy toàn bộ: **~11–12 giây**. |
+| **TỔNG CỘNG** | **75** | **75 / 75 PASS (100%)** | Thời gian chạy toàn bộ: **~7–12 giây**. |
 
 ---
 
@@ -236,16 +262,16 @@ python -m unittest discover tests -v
 
 | Hạng mục yêu cầu trong Đề bài | Mức độ đáp ứng | Minh chứng hiện thực trong mã nguồn |
 | :--- | :---: | :--- |
-| **Trao đổi khóa bất đối xứng** | **100% Đạt** | Giao thức bắt tay dùng RSA-OAEP 2048-bit bọc Master Secret; ký số RSA-PSS (`src/handshake.py`). |
-| **Mã hóa dữ liệu đối xứng** | **100% Đạt** | Áp dụng AES-256-CBC theo chuẩn Encrypt-then-MAC (HMAC-SHA256) (`src/session.py`, `src/crypto_utils.py`). |
-| **Mã xác thực chống giả mạo** | **100% Đạt** | HMAC-SHA256 cho từng khung truyền; RSA-PSS-SHA256 cho tin nhắn và phân mảnh tệp E2E. |
-| **Chương trình Demo Client-Server** | **100% Đạt** | Chương trình Server CLI (`src/server.py`) và Client CLI (`src/client.py`) hoạt động hoàn chỉnh qua mạng TCP. |
-| **Phân tích an toàn chống MitM** | **100% Đạt** | Có kịch bản kiểm thử MitM chuyên biệt (`tests/test_mitm_demo.py`) và phân tích chi tiết tại Chương 2 trong `REPORT.md`. |
-| **Lồng ghép Plaintext Handshake** | **100% Đạt** | Thông điệp bắt tay chứa chuỗi: `Hello, We are 2412716, 2412760` (`src/handshake.py`). |
-| **Khóa khởi tạo KDF băm từ MSSV** | **100% Đạt** | Khóa phiên dẫn xuất có băm danh sách MSSV: `SHA256(MS \|\| enc_list(MSSV) \|\| Nonce)` (`src/crypto_utils.py`). |
-| **Dịch vụ CA chuẩn X.509** | **100% Đạt** | Công cụ `tools/make_pki.py` sinh Root CA X.509v3 và cấp phát chứng thư số cho Server và Client. |
-| **Tích hợp kiểm tra CRL** | **100% Đạt** | Module `src/crl.py` phát hành X.509 CRL theo RFC 5280, tích hợp thẩm định vào `pki.verify_cert_with_crl()`. |
-| **Tích hợp kiểm tra OCSP** | **100% Đạt** | Module `src/ocsp_server.py` hiện thực HTTP OCSP Responder theo RFC 6960, kiểm tra qua `pki.verify_cert_with_ocsp()`. |
-| **Lồng ghép CN của Root CA** | **100% Đạt** | $CN = \text{CA-Root-2412716-2412760}$ (`tools/make_pki.py`). |
-| **Lồng ghép OU của Root CA** | **100% Đạt** | $OU = \text{Faculty of Computer Science and Engineer – 2412716-2412760}$ (`tools/make_pki.py`). |
-| **Cấu trúc nộp bài quy định** | **100% Đạt** | Có tệp `README.md`, thư mục `src/`, thư mục `refs/`, và báo cáo kỹ thuật `REPORT.md` (đầy đủ các chương 1, 2, 3, 4, TLTK, Phụ lục). |
+| **Trao đổi khóa bất đối xứng** | **Đạt** | Giao thức bắt tay dùng RSA-OAEP 2048-bit bọc Master Secret; ký số RSA-PSS (`src/handshake.py`). |
+| **Mã hóa dữ liệu đối xứng** | **Đạt** | Áp dụng AES-256-CBC theo chuẩn Encrypt-then-MAC (HMAC-SHA256) (`src/session.py`, `src/crypto_utils.py`). |
+| **Mã xác thực chống giả mạo** | **Đạt** | HMAC-SHA256 cho từng khung truyền; RSA-PSS-SHA256 cho tin nhắn và phân mảnh tệp E2E. |
+| **Chương trình Demo Client-Server** | **Đạt** | Chương trình Server CLI (`src/server.py`) và Client CLI (`src/client.py`) hoạt động hoàn chỉnh qua mạng TCP. |
+| **Phân tích an toàn chống MitM** | **Đạt** | Có kịch bản kiểm thử MitM chuyên biệt (`tests/test_mitm_demo.py`) và phân tích chi tiết tại Chương 2 trong `REPORT.md`. |
+| **Lồng ghép Plaintext Handshake** | **Đạt** | Thông điệp bắt tay chứa chuỗi: `Hello, We are 2412716, 2412760` (`src/handshake.py`). |
+| **Khóa khởi tạo KDF băm từ MSSV** | **Đạt (Mở rộng an toàn)** | Công thức mở rộng `SHA256(MS \|\| enc_list(MSSV) \|\| Nonce)` gắn kết MS và Nonce chống Replay và tăng tính bí mật phiên, bảo lưu thành phần băm MSSV theo yêu cầu (`src/crypto_utils.py`). |
+| **Dịch vụ CA chuẩn X.509** | **Đạt** | Công cụ `tools/make_pki.py` sinh Root CA X.509v3 và cấp phát chứng thư số cho Server và Client. |
+| **Tích hợp kiểm tra CRL** | **Đạt** | Module `src/crl.py` phát hành X.509 CRL theo RFC 5280, hỗ trợ kiểm tra offline trong quy trình bắt tay qua tham số `crl` (`src/pki.py`, `src/handshake.py`). |
+| **Tích hợp kiểm tra OCSP** | **Đạt** | Module `src/ocsp_server.py` hiện thực HTTP OCSP Responder theo RFC 6960, hỗ trợ kiểm tra online trong quy trình bắt tay qua tham số `ocsp_url` (`src/pki.py`, `src/handshake.py`). |
+| **Lồng ghép CN của Root CA** | **Đạt** | $CN = \text{CA-Root-2412716-2412760}$ (`tools/make_pki.py`). |
+| **Lồng ghép OU của Root CA** | **Đạt** | $OU = \text{Faculty of Computer Science and Engineer – 2412716-2412760}$ (`tools/make_pki.py`). |
+| **Cấu trúc nộp bài quy định** | **Đạt** | Có tệp `README.md`, thư mục `src/`, thư mục `refs/`, và báo cáo kỹ thuật `REPORT.md` (đầy đủ các chương 1, 2, 3, 4, TLTK, Phụ lục). |

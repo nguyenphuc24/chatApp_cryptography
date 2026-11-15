@@ -52,7 +52,10 @@ def _send_plain(sock, msg_type: str, payload: dict) -> None:
 
 def _recv_plain(sock) -> dict | None:
     """Nhận gói tin plaintext."""
-    frame = framing.recv_frame(sock)
+    try:
+        frame = framing.recv_frame(sock)
+    except framing.FrameTooLargeError:
+        return None
     if frame is None:
         return None
     try:
@@ -92,9 +95,12 @@ def client_handshake(
     client_cert: x509.Certificate,
     client_key,
     mssv_list: list[str],
+    crl: x509.CertificateRevocationList | None = None,
+    ocsp_url: str | None = None,
 ) -> Session:
     """
     Thực hiện handshake phía client.
+    Hỗ trợ kiểm tra thu hồi chứng chỉ server qua CRL hoặc OCSP nếu được cung cấp.
     Trả về Session sẵn sàng hoặc ném exception nếu thất bại.
     """
 
@@ -108,9 +114,14 @@ def client_handshake(
     server_nonce_hex = payload.get("server_nonce", "")
     nonce_bytes      = bytes.fromhex(server_nonce_hex)
 
-    # ── B2: Kiểm tra chứng chỉ server ────────────────────────────────────────
+    # ── B2: Kiểm tra chứng chỉ server (kèm CRL/OCSP nếu có) ───────────────────
     server_cert = pki_module.load_cert(server_cert_pem.encode())
-    pki_module.verify_cert(server_cert, ca_cert, expected_cn=SERVER_CN, usage="server")
+    if crl is not None:
+        pki_module.verify_cert_with_crl(server_cert, ca_cert, crl, expected_cn=SERVER_CN, usage="server")
+    elif ocsp_url:
+        pki_module.verify_cert_with_ocsp(server_cert, ca_cert, ocsp_url, expected_cn=SERVER_CN, usage="server")
+    else:
+        pki_module.verify_cert(server_cert, ca_cert, expected_cn=SERVER_CN, usage="server")
     server_pub  = server_cert.public_key()
 
     # ── B3: Sinh MS và mã hoá bằng khoá công khai server ────────────────────
@@ -150,7 +161,10 @@ def client_handshake(
     key_aes, key_hmac = kdf_keys(session_key)
 
     # ── B9: Nhận OK (đã mã hoá bằng khoá phiên) ─────────────────────────────
-    ok_frame = framing.recv_frame(sock)
+    try:
+        ok_frame = framing.recv_frame(sock)
+    except framing.FrameTooLargeError as exc:
+        raise ValueError(f"Khung HANDSHAKE_OK quá lớn: {exc}") from exc
     if ok_frame is None:
         raise ValueError("Không nhận được HANDSHAKE_OK")
     ok_raw = verify_then_decrypt(ok_frame, key_aes, key_hmac)
@@ -179,9 +193,12 @@ def server_handshake(
     ca_cert: x509.Certificate,
     server_cert: x509.Certificate,
     server_key,
+    crl: x509.CertificateRevocationList | None = None,
+    ocsp_url: str | None = None,
 ) -> Session:
     """
     Thực hiện handshake phía server.
+    Hỗ trợ kiểm tra thu hồi chứng chỉ client qua CRL hoặc OCSP nếu được cung cấp.
     Trả về Session (peer_cn = CN của nhóm) hoặc ném exception nếu thất bại.
     """
 
@@ -220,9 +237,14 @@ def server_handshake(
     sig_bytes       = bytes.fromhex(body.get("signature", ""))
     message         = body.get("message", "")
 
-    # ── B5: Kiểm tra chứng chỉ client ────────────────────────────────────────
+    # ── B5: Kiểm tra chứng chỉ client (kèm CRL/OCSP nếu có) ───────────────────
     client_cert = pki_module.load_cert(client_cert_pem.encode())
-    pki_module.verify_cert(client_cert, ca_cert, usage="client")  # CA ký, còn hạn, không phải CA
+    if crl is not None:
+        pki_module.verify_cert_with_crl(client_cert, ca_cert, crl, usage="client")
+    elif ocsp_url:
+        pki_module.verify_cert_with_ocsp(client_cert, ca_cert, ocsp_url, usage="client")
+    else:
+        pki_module.verify_cert(client_cert, ca_cert, usage="client")  # CA ký, còn hạn, không phải CA
 
     # UID trong cert phải khớp mssv_list (đúng thứ tự)
     cert_uids = pki_module.get_uids(client_cert)

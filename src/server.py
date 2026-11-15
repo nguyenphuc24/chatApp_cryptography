@@ -48,6 +48,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CA      = os.path.join(BASE_DIR, "pki", "ca.crt")
 DEFAULT_CERT    = os.path.join(BASE_DIR, "pki", "server.crt")
 DEFAULT_KEY     = os.path.join(BASE_DIR, "pki", "server.key")
+DEFAULT_CRL     = os.path.join(BASE_DIR, "pki", "ca.crl")
 DEFAULT_STORAGE = os.path.join(BASE_DIR, "server_storage")
 
 
@@ -80,6 +81,8 @@ class SecureChatServer:
         server_cert=None,
         server_key=None,
         storage_dir: str = DEFAULT_STORAGE,
+        crl=None,
+        ocsp_url: str | None = None,
     ):
         self.host        = host
         self.port        = port
@@ -87,6 +90,8 @@ class SecureChatServer:
         self.server_cert = server_cert
         self.server_key  = server_key
         self.storage_dir = storage_dir
+        self.crl         = crl
+        self.ocsp_url    = ocsp_url
         os.makedirs(self.storage_dir, exist_ok=True)
 
         self._lock   = threading.Lock()
@@ -192,7 +197,12 @@ class SecureChatServer:
         session: Session | None = None
         try:
             session, handshake_message = hs.server_handshake(
-                conn, self.ca_cert, self.server_cert, self.server_key
+                conn,
+                self.ca_cert,
+                self.server_cert,
+                self.server_key,
+                crl=self.crl,
+                ocsp_url=self.ocsp_url,
             )
         except Exception as exc:
             self.log(f"Handshake thất bại từ {peer}: {exc}")
@@ -516,6 +526,9 @@ def _parse_args():
     p.add_argument("--ca",      default=DEFAULT_CA)
     p.add_argument("--cert",    default=DEFAULT_CERT)
     p.add_argument("--key",     default=DEFAULT_KEY)
+    p.add_argument("--crl",     default=DEFAULT_CRL if os.path.exists(DEFAULT_CRL) else None,
+                   help="Đường dẫn file CRL (.crl hoặc .pem)")
+    p.add_argument("--ocsp",    default=None, help="URL OCSP server (vd: http://127.0.0.1:8888)")
     p.add_argument("--storage", default=DEFAULT_STORAGE)
     return p.parse_args()
 
@@ -527,6 +540,10 @@ if __name__ == "__main__":
     print(f"  Lắng nghe : {args.host}:{args.port}")
     print(f"  CA        : {args.ca}")
     print(f"  Cert      : {args.cert}")
+    if args.crl:
+        print(f"  CRL       : {args.crl}")
+    if args.ocsp:
+        print(f"  OCSP      : {args.ocsp}")
     print(f"  Storage   : {args.storage}")
     print("  Lệnh console: 'exit' hoặc 'quit' để tắt an toàn | hoặc nhấn Ctrl+C")
     print("=" * 60)
@@ -534,6 +551,10 @@ if __name__ == "__main__":
     ca_cert     = pki_module.load_cert_from_file(args.ca)
     server_cert = pki_module.load_cert_from_file(args.cert)
     server_key  = pki_module.load_private_key_from_file(args.key)
+    crl = None
+    if args.crl and os.path.exists(args.crl):
+        from crl import load_crl
+        crl = load_crl(args.crl)
 
     srv = SecureChatServer(
         host=args.host,
@@ -542,6 +563,8 @@ if __name__ == "__main__":
         server_cert=server_cert,
         server_key=server_key,
         storage_dir=args.storage,
+        crl=crl,
+        ocsp_url=args.ocsp,
     )
 
     # Chạy server trong thread nền để console có thể nhận lệnh
@@ -549,7 +572,7 @@ if __name__ == "__main__":
     srv_thread.start()
 
     try:
-        if sys.stdin and sys.stdin.isatty():
+        if sys.stdin:
             while srv_thread.is_alive():
                 try:
                     line = input("> ").strip()
@@ -573,9 +596,6 @@ if __name__ == "__main__":
                     print("Các lệnh khả dụng: exit / quit / status / clients")
                 else:
                     print(f"Lệnh không xác định: '{line}'. Gõ 'exit' để dừng server.")
-        else:
-            while srv_thread.is_alive():
-                time.sleep(0.5)
     except KeyboardInterrupt:
         print("\n[Server] Nhận Ctrl+C. Đang tắt...")
     finally:

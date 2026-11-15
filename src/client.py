@@ -57,7 +57,8 @@ BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CA    = os.path.join(BASE_DIR, "pki", "ca.crt")
 DEFAULT_CERT  = os.path.join(BASE_DIR, "pki", "team1", "client.crt")
 DEFAULT_KEY   = os.path.join(BASE_DIR, "pki", "team1", "client.key")
-DEFAULT_MSSV  = ["2312345", "2312346"]
+DEFAULT_CRL   = os.path.join(BASE_DIR, "pki", "ca.crl")
+DEFAULT_MSSV  = ["2412716", "2412760"]
 DOWNLOAD_DIR  = os.path.join(BASE_DIR, "downloads")
 STATE_DIR     = os.path.join(BASE_DIR, ".client_state")
 
@@ -72,6 +73,8 @@ class SecureChatClient:
         client_cert=None,
         client_key=None,
         mssv_list: list[str] = None,
+        crl=None,
+        ocsp_url: str | None = None,
     ):
         self.host        = host
         self.port        = port
@@ -79,6 +82,8 @@ class SecureChatClient:
         self.client_cert = client_cert
         self.client_key  = client_key
         self.mssv_list   = mssv_list or []
+        self.crl         = crl
+        self.ocsp_url    = ocsp_url
         self.my_cn       = pki_module.get_cn(client_cert) if client_cert else ""
 
         self.session: Session | None = None
@@ -181,7 +186,13 @@ class SecureChatClient:
 
         try:
             self.session = hs.client_handshake(
-                sock, self.ca_cert, self.client_cert, self.client_key, self.mssv_list
+                sock,
+                self.ca_cert,
+                self.client_cert,
+                self.client_key,
+                self.mssv_list,
+                crl=self.crl,
+                ocsp_url=self.ocsp_url,
             )
         except Exception as exc:
             self.safe_print(f"[Lỗi] Handshake thất bại: {exc}", prompt=False)
@@ -502,6 +513,9 @@ def _parse_args():
     p.add_argument("--ca",    default=DEFAULT_CA)
     p.add_argument("--cert",  default=DEFAULT_CERT)
     p.add_argument("--key",   default=DEFAULT_KEY)
+    p.add_argument("--crl",   default=DEFAULT_CRL if os.path.exists(DEFAULT_CRL) else None,
+                   help="Đường dẫn file CRL (.crl hoặc .pem)")
+    p.add_argument("--ocsp",  default=None, help="URL OCSP server (vd: http://127.0.0.1:8888)")
     p.add_argument("--mssv",  nargs="+", default=DEFAULT_MSSV)
     return p.parse_args()
 
@@ -512,6 +526,10 @@ if __name__ == "__main__":
         ca_cert     = pki_module.load_cert_from_file(args.ca)
         client_cert = pki_module.load_cert_from_file(args.cert)
         client_key  = pki_module.load_private_key_from_file(args.key)
+        crl = None
+        if args.crl and os.path.exists(args.crl):
+            from crl import load_crl
+            crl = load_crl(args.crl)
         cli = SecureChatClient(
                 host=args.host,
                 port=args.port,
@@ -519,6 +537,8 @@ if __name__ == "__main__":
                 client_cert=client_cert,
                 client_key=client_key,
                 mssv_list=args.mssv,
+                crl=crl,
+                ocsp_url=args.ocsp,
             )
         cli.run()
     except Exception as e:

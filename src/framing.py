@@ -21,25 +21,30 @@ import struct
 MAX_FRAME: int = 64 * 1024  # 64 KiB — ngưỡng chống frame quá lớn
 
 
+class FrameTooLargeError(ValueError):
+    """Ném ra khi độ dài frame nhận được vượt quá MAX_FRAME (phòng vệ chống DoS)."""
+    pass
+
+
 def send_frame(sock: _socket.socket, data: bytes) -> None:
     """Gửi một frame: 4-byte header || payload."""
     if len(data) > MAX_FRAME:
-        raise ValueError(f"Frame quá lớn: {len(data)} bytes > MAX_FRAME={MAX_FRAME}")
+        raise FrameTooLargeError(f"Frame quá lớn: {len(data)} bytes > MAX_FRAME={MAX_FRAME}")
     sock.sendall(struct.pack("!I", len(data)) + data)
 
 
 def recv_frame(sock: _socket.socket) -> bytes | None:
     """
-    Nhận đúng một frame. Trả về payload bytes hoặc None khi lỗi/quá lớn.
-    Không dùng continue khi timeout — trả về None để caller đóng kết nối.
+    Nhận đúng một frame. Trả về payload bytes hoặc None khi EOF / đóng kết nối.
+    Ném FrameTooLargeError nếu frame vượt quá MAX_FRAME để caller ghi nhận log.
     """
     header = _recv_exact(sock, 4)
     if header is None:
         return None
     n = struct.unpack("!I", header)[0]
     if n > MAX_FRAME:
-        # Frame quá lớn → caller phải đóng kết nối
-        return None
+        # Frame quá lớn → ném lỗi để phân biệt rõ với EOF
+        raise FrameTooLargeError(f"Độ dài frame khai báo ({n} bytes) vượt quá MAX_FRAME ({MAX_FRAME} bytes)")
     return _recv_exact(sock, n)
 
 

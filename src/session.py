@@ -137,7 +137,12 @@ class Session:
           3. timestamp trong cửa sổ [now−30s, now+10s].
         None → caller nên đóng phiên.
         """
-        frame = framing.recv_frame(self.sock)
+        try:
+            frame = framing.recv_frame(self.sock)
+        except framing.FrameTooLargeError:
+            self._closed = True
+            return None
+
         if frame is None:
             self._closed = True
             return None
@@ -158,15 +163,15 @@ class Session:
         if seq != self._recv_seq + 1:
             self._closed = True
             return None
-        self._recv_seq = seq
 
-        # Kiểm tra timestamp
+        # Kiểm tra timestamp trước khi cập nhật _recv_seq
         ts  = pkt.get("timestamp", 0.0)
         now = time.time()
         if not (now - REPLAY_WINDOW_SEC <= ts <= now + FUTURE_SLACK_SEC):
             self._closed = True
             return None
 
+        self._recv_seq = seq
         self._last_recv = time.monotonic()
         return pkt
 

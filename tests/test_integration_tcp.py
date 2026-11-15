@@ -201,6 +201,36 @@ class TestTCPIntegration(unittest.TestCase):
         alice_session.close()
         bob_session.close()
 
+    def test_cli_main_startup_with_crl(self):
+        """Kiểm thử quy trình khởi động CLI thông qua main() của server.py và client.py với nạp CRL."""
+        import subprocess
+
+        # 1. Khởi động server.py bằng CLI với CRL mặc định pki/ca.crl và gửi lệnh exit qua stdin
+        port = self.port + 10
+        p_srv = subprocess.Popen(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "..", "src", "server.py"), "--port", str(port)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        srv_out, srv_err = p_srv.communicate("exit\n", timeout=5)
+        self.assertEqual(p_srv.returncode, 0, f"server.py main() thất bại với lỗi: {srv_err}")
+        self.assertNotIn("ImportError", srv_err)
+        self.assertIn("SECURE CHAT SERVER", srv_out)
+
+        # 2. Khởi động client.py bằng CLI với CRL mặc định kết nối đến cổng không khả dụng
+        p_cli = subprocess.Popen(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "..", "src", "client.py"), "--port", str(port + 1)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        cli_out, cli_err = p_cli.communicate("", timeout=5)
+        self.assertEqual(p_cli.returncode, 0, f"client.py main() thất bại với lỗi: {cli_err}")
+        self.assertNotIn("ImportError", cli_err)
+
 
 if __name__ == "__main__":
     unittest.main()

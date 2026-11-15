@@ -7,7 +7,7 @@ Các ca kiểm thử:
     3. test_good_cert_not_revoked      – Cert chưa revoke → is_revoked() trả False
     4. test_expired_crl_rejected       – CRL hết hạn → verify_cert_with_crl ném lỗi
     5. test_verify_cert_with_crl_rejects_revoked – end-to-end: verify_cert_with_crl từ chối cert revoked
-    6. test_handshake_rejected_with_revoked_cert – Handshake bị từ chối nếu cert bị thu hồi
+    6. test_verify_cert_with_crl_accepts_good_cert – Cert hợp lệ chưa thu hồi được chấp nhận
 """
 
 import datetime

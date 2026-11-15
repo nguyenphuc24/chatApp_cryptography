@@ -34,16 +34,16 @@ class TestFraming(unittest.TestCase):
 
     def test_send_oversized_frame_raises(self):
         oversized = b"X" * (framing.MAX_FRAME + 1)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(framing.FrameTooLargeError):
             framing.send_frame(self.sock_a, oversized)
 
     def test_recv_oversized_header_returns_none(self):
-        # Malicious peer sends length > MAX_FRAME
+        # Malicious peer sends length > MAX_FRAME -> ném FrameTooLargeError
         bad_len = framing.MAX_FRAME + 100
         header = struct.pack("!I", bad_len)
         self.sock_a.sendall(header)
-        received = framing.recv_frame(self.sock_b)
-        self.assertIsNone(received, "Header claiming > MAX_FRAME must return None to close connection")
+        with self.assertRaises(framing.FrameTooLargeError):
+            framing.recv_frame(self.sock_b)
 
     def test_fragmented_delivery(self):
         # Send frame payload in tiny 3-byte chunks

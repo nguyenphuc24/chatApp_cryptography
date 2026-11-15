@@ -138,6 +138,10 @@ def load_crl(pem_or_path) -> x509.CertificateRevocationList:
     return x509.load_pem_x509_crl(pem_data, default_backend())
 
 
+# Bí danh tương thích cho việc nạp file CRL
+load_crl_file = load_crl
+
+
 # ─── Kiểm tra thu hồi ─────────────────────────────────────────────────────────
 
 def is_revoked(cert: x509.Certificate, crl: x509.CertificateRevocationList) -> bool:
